@@ -31,8 +31,10 @@ from OpenGL.GL import (
     GL_LIGHT0,
     GL_LIGHTING,
     GL_MODELVIEW,
+    GL_POSITION,
     GL_PROJECTION,
     GL_SHININESS,
+    GL_SMOOTH,
     GL_SPECULAR,
     GL_TRIANGLES,
 )
