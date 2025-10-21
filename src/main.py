@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import pathlib
+import sys
 
-from .cloth3d import Cloth3D
-from .draw3d import Draw3D
-from .mesh3d import Mesh3D
+_MODULE_DIR = pathlib.Path(__file__).resolve().parent
+if str(_MODULE_DIR) not in sys.path:
+    sys.path.insert(0, str(_MODULE_DIR))
+
+from cloth3d import Cloth3D
+from draw3d import Draw3D
+from mesh3d import Mesh3D
 
 
 def create_square_mesh(size: float, subdivisions: int) -> Mesh3D:

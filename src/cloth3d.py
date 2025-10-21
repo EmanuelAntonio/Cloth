@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .mesh3d import Mesh3D
+from mesh3d import Mesh3D
 
 
 @dataclass

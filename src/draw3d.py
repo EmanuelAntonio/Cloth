@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import numpy as np
@@ -51,8 +51,8 @@ from OpenGL.GLUT import (
     glutWMCloseFunc,
 )
 
-from .cloth3d import Cloth3D
-from .mesh3d import Mesh3D
+from cloth3d import Cloth3D
+from mesh3d import Mesh3D
 
 
 @dataclass
@@ -65,7 +65,7 @@ class Draw3D:
     phi: float = math.pi / 4.0
     theta: float = math.pi / 4.0
     radius: float = 4.0
-    center: np.ndarray = np.zeros(3)
+    center: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
 
     _left_button_down: bool = False
     _last_mouse_pos: Optional[Tuple[int, int]] = None
