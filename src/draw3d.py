@@ -11,22 +11,30 @@ from OpenGL.GL import (
     glBegin,
     glClear,
     glClearColor,
-    glColor3f,
     glEnable,
     glEnd,
-    glLineWidth,
+    glLightfv,
     glLoadIdentity,
+    glMaterialf,
+    glMaterialfv,
     glMatrixMode,
-    glPointSize,
+    glNormal3fv,
+    glShadeModel,
     glViewport,
     glVertex3f,
+    GL_AMBIENT,
     GL_COLOR_BUFFER_BIT,
     GL_DEPTH_BUFFER_BIT,
     GL_DEPTH_TEST,
-    GL_LINES,
+    GL_DIFFUSE,
+    GL_FRONT_AND_BACK,
+    GL_LIGHT0,
+    GL_LIGHTING,
     GL_MODELVIEW,
-    GL_POINTS,
     GL_PROJECTION,
+    GL_SHININESS,
+    GL_SPECULAR,
+    GL_TRIANGLES,
 )
 from OpenGL.GLU import gluLookAt, gluPerspective
 from OpenGL.GLUT import (
@@ -62,8 +70,8 @@ class Draw3D:
     window_size: Tuple[int, int] = (960, 720)
     fov_y: float = 45.0
 
-    phi: float = math.pi / 4.0
     theta: float = math.pi / 4.0
+    phi: float = 0.5
     radius: float = 4.0
     center: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
 
@@ -89,8 +97,15 @@ class Draw3D:
         glutInitWindowPosition(100, 100)
         glutCreateWindow(b"Cloth Simulation")
 
-        glClearColor(0.1, 0.1, 0.1, 1.0)
+        glClearColor(0.05, 0.05, 0.05, 1.0)
         glEnable(GL_DEPTH_TEST)
+        glEnable(GL_LIGHTING)
+        glEnable(GL_LIGHT0)
+        glShadeModel(GL_SMOOTH)
+
+        glLightfv(GL_LIGHT0, GL_AMBIENT, (0.1, 0.1, 0.1, 1.0))
+        glLightfv(GL_LIGHT0, GL_DIFFUSE, (0.8, 0.8, 0.8, 1.0))
+        glLightfv(GL_LIGHT0, GL_SPECULAR, (0.9, 0.9, 0.9, 1.0))
 
         glutDisplayFunc(self.display)
         glutIdleFunc(self.idle)
@@ -103,16 +118,17 @@ class Draw3D:
 
     # -- Camera handling --------------------------------------------------
     def _compute_camera(self) -> Tuple[np.ndarray, np.ndarray]:
-        theta = np.clip(self.theta, 1e-3, math.pi - 1e-3)
-        phi = self.phi
+        theta = self.theta
+        phi = np.clip(self.phi, -math.pi / 2 + 1e-3, math.pi / 2 - 1e-3)
         r = max(self.radius, 0.1)
 
-        sin_theta = math.sin(theta)
+        cos_phi = math.cos(phi)
+        sin_phi = math.sin(phi)
         eye = np.array(
             [
-                self.center[0] + r * sin_theta * math.cos(phi),
-                self.center[1] + r * math.cos(theta),
-                self.center[2] + r * sin_theta * math.sin(phi),
+                self.center[0] + r * math.cos(theta) * cos_phi,
+                self.center[1] + r * math.sin(theta) * cos_phi,
+                self.center[2] + r * sin_phi,
             ],
             dtype=np.float64,
         )
@@ -120,10 +136,10 @@ class Draw3D:
         forward = self.center - eye
         forward /= np.linalg.norm(forward)
 
-        world_up = np.array([0.0, 1.0, 0.0])
+        world_up = np.array([0.0, 0.0, 1.0])
         right = np.cross(forward, world_up)
         if np.linalg.norm(right) < 1e-6:
-            world_up = np.array([0.0, 0.0, 1.0])
+            world_up = np.array([0.0, 1.0, 0.0])
             right = np.cross(forward, world_up)
         right /= np.linalg.norm(right)
         up = np.cross(right, forward)
@@ -154,9 +170,9 @@ class Draw3D:
         self._last_mouse_pos = (x, y)
 
         sensitivity = 0.005
-        self.phi += dx * sensitivity
-        self.theta += dy * sensitivity
-        self.theta = np.clip(self.theta, 1e-3, math.pi - 1e-3)
+        self.theta += dx * sensitivity
+        self.phi -= dy * sensitivity
+        self.phi = np.clip(self.phi, -math.pi / 2 + 1e-3, math.pi / 2 - 1e-3)
 
         glutPostRedisplay()
 
@@ -180,26 +196,24 @@ class Draw3D:
         glLoadIdentity()
 
         eye, up = self._compute_camera()
+        glLightfv(GL_LIGHT0, GL_POSITION, (eye[0], eye[1], eye[2], 1.0))
         gluLookAt(
             eye[0], eye[1], eye[2],
             self.center[0], self.center[1], self.center[2],
             up[0], up[1], up[2],
         )
 
-        glColor3f(0.8, 0.8, 0.9)
-        glLineWidth(2.0)
-        glBegin(GL_LINES)
-        for i, j in self.mesh.edges:
-            vi = self.mesh.positions[i]
-            vj = self.mesh.positions[j]
-            glVertex3f(*vi)
-            glVertex3f(*vj)
-        glEnd()
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, (0.1, 0.3, 0.05, 1.0))
+        glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, (0.4, 0.9, 0.1, 1.0))
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, (0.7, 1.0, 0.6, 1.0))
+        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 64.0)
 
-        glPointSize(5.0)
-        glBegin(GL_POINTS)
-        for vertex in self.mesh.positions:
-            glVertex3f(*vertex)
+        normals = self.mesh.compute_vertex_normals()
+        glBegin(GL_TRIANGLES)
+        for face in self.mesh.faces:
+            for vertex_index in face:
+                glNormal3fv(normals[vertex_index])
+                glVertex3f(*self.mesh.positions[vertex_index])
         glEnd()
 
         glutSwapBuffers()

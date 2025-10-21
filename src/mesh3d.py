@@ -19,6 +19,7 @@ class Mesh3D:
     positions: np.ndarray
     edges: List[Tuple[int, int]]
     free_dof: np.ndarray
+    faces: List[Tuple[int, int, int]] = field(default_factory=list)
     initial_positions: np.ndarray = field(init=False)
     base_free_dof: np.ndarray = field(init=False)
 
@@ -36,6 +37,9 @@ class Mesh3D:
         if self.free_dof.shape != self.positions.shape:
             raise ValueError("free_dof must match the shape of positions")
         self.base_free_dof = self.free_dof.copy()
+
+        # Faces are optional for simulation but required for shaded rendering.
+        self.faces = [tuple(face) for face in self.faces]
 
     @property
     def n_vertices(self) -> int:
@@ -85,7 +89,12 @@ class Mesh3D:
         return bool(self.free_dof[index, axis])
 
     def clone(self) -> "Mesh3D":
-        clone = Mesh3D(self.positions.copy(), list(self.edges), self.free_dof.copy())
+        clone = Mesh3D(
+            self.positions.copy(),
+            list(self.edges),
+            self.free_dof.copy(),
+            list(self.faces),
+        )
         clone.initial_positions = self.initial_positions.copy()
         clone.base_free_dof = self.base_free_dof.copy()
         return clone
@@ -107,6 +116,7 @@ class Mesh3D:
         positions: List[Tuple[float, float, float]] = []
         free_dof: List[Tuple[bool, bool, bool]] = []
         edges: List[Tuple[int, int]] = []
+        faces: List[Tuple[int, int, int]] = []
 
         # create vertices
         half = size / 2.0
@@ -133,7 +143,20 @@ class Mesh3D:
                 if ix > 0 and iy + 1 < grid_n:
                     edges.append((idx(ix, iy), idx(ix - 1, iy + 1)))
 
-        mesh = Mesh3D(np.array(positions), edges, np.array(free_dof, dtype=bool))
+                if ix + 1 < grid_n and iy + 1 < grid_n:
+                    v0 = idx(ix, iy)
+                    v1 = idx(ix + 1, iy)
+                    v2 = idx(ix, iy + 1)
+                    v3 = idx(ix + 1, iy + 1)
+                    faces.append((v0, v1, v2))
+                    faces.append((v2, v1, v3))
+
+        mesh = Mesh3D(
+            np.array(positions),
+            edges,
+            np.array(free_dof, dtype=bool),
+            faces,
+        )
 
         # Fix the four corners of the original square completely.
         corners = [idx(0, 0), idx(grid_n - 1, 0), idx(0, grid_n - 1), idx(grid_n - 1, grid_n - 1)]
@@ -145,5 +168,30 @@ class Mesh3D:
     def reset(self) -> None:
         self.positions[:] = self.initial_positions
         self.free_dof[:, :] = self.base_free_dof
+
+    def compute_vertex_normals(self) -> np.ndarray:
+        """Compute per-vertex normals from the available triangle faces."""
+
+        normals = np.zeros_like(self.positions)
+        for face in self.faces:
+            i0, i1, i2 = face
+            p0, p1, p2 = self.positions[[i0, i1, i2]]
+            edge1 = p1 - p0
+            edge2 = p2 - p0
+            face_normal = np.cross(edge1, edge2)
+            norm = np.linalg.norm(face_normal)
+            if norm == 0:
+                continue
+            face_normal /= norm
+            normals[i0] += face_normal
+            normals[i1] += face_normal
+            normals[i2] += face_normal
+
+        norms = np.linalg.norm(normals, axis=1)
+        nonzero = norms > 0
+        normals[nonzero] /= norms[nonzero][:, None]
+        # Default normal for isolated vertices.
+        normals[~nonzero] = np.array([0.0, 0.0, 1.0])
+        return normals
 
 
