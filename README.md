@@ -1,0 +1,37 @@
+# Cloth Simulation Prototype
+
+Este repositório contém um protótipo de simulação de tecido 3D baseado em um modelo massa-mola escrito em Python.
+
+## Estrutura
+- `src/mesh3d.py`: cria e gerencia a malha 3D e os graus de liberdade por nó.
+- `src/cloth3d.py`: implementa a simulação do tecido com forças elásticas, gravidade e amortecimento.
+- `src/draw3d.py`: visualizador em OpenGL com câmera esférica controlada pelo mouse.
+- `src/main.py`: ponto de entrada para executar a simulação.
+
+## Como executar
+1. Instale as dependências necessárias (por exemplo, `PyOpenGL` e `PyOpenGL_accelerate`).
+2. Execute o módulo principal:
+   ```bash
+   python -m src.main
+   ```
+   Use as opções `--size`, `--subdivisions`, `--spring` e `--timestep` para ajustar a malha e a simulação.
+
+## Como enviar as alterações para o GitHub
+1. Garanta que suas alterações estejam salvas e verifique o estado do repositório:
+   ```bash
+   git status
+   ```
+2. Adicione os arquivos desejados à área de staging:
+   ```bash
+   git add README.md src/
+   ```
+3. Crie um commit com uma mensagem descritiva:
+   ```bash
+   git commit -m "Adiciona README com instruções"
+   ```
+4. Envie a branch atual para o GitHub:
+   ```bash
+   git push origin <nome-da-branch>
+   ```
+
+Esses passos podem ser executados diretamente a partir deste ambiente ou na sua máquina local vinculada ao repositório remoto.
