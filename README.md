@@ -14,7 +14,8 @@ Este repositório contém um protótipo de simulação de tecido 3D baseado em u
    ```bash
    python -m src.main
    ```
-   Use as opções `--size`, `--subdivisions`, `--spring` e `--timestep` para ajustar a malha e a simulação.
+   Use as opções `--size`, `--subdivisions`, `--spring`, `--timestep` e `--max-stretch` para ajustar a malha e a simulação.
+   O parâmetro `--max-stretch` limita o alongamento máximo das molas em relação ao comprimento de repouso (por exemplo, `--max-stretch 1.5`).
 
 ## Como enviar as alterações para o GitHub
 1. Garanta que suas alterações estejam salvas e verifique o estado do repositório:

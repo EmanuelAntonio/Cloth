@@ -24,13 +24,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--subdivisions", type=int, default=10, help="Number of subdivisions per side")
     parser.add_argument("--spring", type=float, default=800.0, help="Spring constant")
     parser.add_argument("--timestep", type=float, default=1 / 120.0, help="Integration time step")
+    parser.add_argument(
+        "--max-stretch",
+        type=float,
+        default=None,
+        help="Optional maximum stretch ratio (>=1.0) applied to each spring",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     mesh = create_square_mesh(size=args.size, subdivisions=args.subdivisions)
-    cloth = Cloth3D(mesh=mesh, spring_k=args.spring, time_step=args.timestep)
+    cloth = Cloth3D(
+        mesh=mesh,
+        spring_k=args.spring,
+        time_step=args.timestep,
+        max_stretch_ratio=args.max_stretch,
+    )
     viewer = Draw3D(mesh=mesh, cloth=cloth)
     viewer.run()
 
