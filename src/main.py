@@ -50,6 +50,18 @@ def parse_args() -> argparse.Namespace:
         default=0.8,
         help="Extra height above the sphere surface for the cloth start",
     )
+    parser.add_argument(
+        "--self-collision-distance",
+        type=float,
+        default=0.05,
+        help="Minimum distance maintained between non-adjacent vertices (0 disables)",
+    )
+    parser.add_argument(
+        "--self-collision-iterations",
+        type=int,
+        default=1,
+        help="Number of relaxation passes used to separate colliding vertices",
+    )
     return parser.parse_args()
 
 
@@ -77,6 +89,8 @@ def main() -> None:
         time_step=args.timestep,
         max_stretch_ratio=args.max_stretch,
         colliders=colliders,
+        self_collision_distance=args.self_collision_distance,
+        self_collision_iterations=args.self_collision_iterations,
     )
     viewer = Draw3D(mesh=mesh, cloth=cloth)
     viewer.run()

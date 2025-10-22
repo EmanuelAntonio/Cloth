@@ -16,6 +16,7 @@ Este repositório contém um protótipo de simulação de tecido 3D baseado em u
    ```
    Use as opções `--size`, `--subdivisions`, `--spring`, `--timestep` e `--max-stretch` para ajustar a malha e a simulação.
    O parâmetro `--max-stretch` limita o alongamento máximo das molas em relação ao comprimento de repouso (por exemplo, `--max-stretch 1.5`).
+   Os parâmetros `--self-collision-distance` e `--self-collision-iterations` ativam e configuram o sistema de auto colisão, garantindo que o tecido não atravesse a si mesmo.
 
    O argumento `--scenario` permite alternar entre os cenários disponíveis:
    - `cloth` (padrão): tecido preso nos quatro cantos, suspenso no ar.

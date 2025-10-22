@@ -1,6 +1,7 @@
 """Mass-spring cloth simulation."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -31,6 +32,8 @@ class Cloth3D:
     gravity: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, -9.81]))
     max_stretch_ratio: float | None = None
     colliders: list[SphereCollider] = field(default_factory=list)
+    self_collision_distance: float = 0.05
+    self_collision_iterations: int = 1
 
     def __post_init__(self) -> None:
         if self.spring_k <= 0:
@@ -39,12 +42,25 @@ class Cloth3D:
             raise ValueError("time_step must be positive")
         if self.max_stretch_ratio is not None and self.max_stretch_ratio < 1.0:
             raise ValueError("max_stretch_ratio must be >= 1.0 or None")
+        if self.self_collision_distance < 0.0:
+            raise ValueError("self_collision_distance must be >= 0")
+        if self.self_collision_iterations < 0:
+            raise ValueError("self_collision_iterations must be >= 0")
 
         self.velocities = np.zeros_like(self.mesh.positions)
         self.rest_lengths = np.array([
             np.linalg.norm(self.mesh.positions[j] - self.mesh.positions[i])
             for i, j in self.mesh.edges
         ])
+        self._edge_lookup = {
+            (i, j) if i < j else (j, i)
+            for i, j in self.mesh.edges
+        }
+
+        self._self_collision_distance = float(self.self_collision_distance)
+        self._self_collision_distance_sq = self._self_collision_distance ** 2
+
+    # ------------------------------------------------------------------
 
     def compute(self) -> None:
         """Advance the simulation by one time step."""
@@ -76,6 +92,7 @@ class Cloth3D:
         positions[:] += self.velocities * self.time_step
 
         self._enforce_max_stretch()
+        self._resolve_self_collisions()
         self._resolve_collisions()
 
         # Apply constraints
@@ -174,3 +191,97 @@ class Cloth3D:
                 normal_velocity = np.dot(self.velocities[idx], normal)
                 if normal_velocity < 0.0:
                     self.velocities[idx] -= normal_velocity * normal
+
+    def _resolve_self_collisions(self) -> None:
+        """Push apart vertices that get too close to each other."""
+
+        if (
+            self._self_collision_distance <= 0.0
+            or self.self_collision_iterations <= 0
+        ):
+            return
+
+        positions = self.mesh.positions
+        free_dof = self.mesh.free_dof
+        radius = self._self_collision_distance
+        radius_sq = self._self_collision_distance_sq
+        cell_size = radius
+        if cell_size <= 0.0:
+            return
+        inv_cell = 1.0 / cell_size
+
+        for _ in range(self.self_collision_iterations):
+            grid: dict[tuple[int, int, int], list[int]] = {}
+            for idx, pos in enumerate(positions):
+                cell = tuple(np.floor(pos * inv_cell).astype(int))
+                grid.setdefault(cell, []).append(idx)
+
+            for idx, pos in enumerate(positions):
+                cell = tuple(np.floor(pos * inv_cell).astype(int))
+                cx, cy, cz = cell
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        for dz in (-1, 0, 1):
+                            neighbour_cell = (cx + dx, cy + dy, cz + dz)
+                            neighbours = grid.get(neighbour_cell)
+                            if not neighbours:
+                                continue
+                            for other in neighbours:
+                                if other <= idx:
+                                    continue
+                                key = (idx, other) if idx < other else (other, idx)
+                                if key in self._edge_lookup:
+                                    continue
+
+                                delta = positions[other] - pos
+                                dist_sq = float(np.dot(delta, delta))
+                                if dist_sq >= radius_sq:
+                                    continue
+
+                                if dist_sq == 0.0:
+                                    normal = np.array([0.0, 0.0, 1.0])
+                                    dist = 0.0
+                                else:
+                                    dist = math.sqrt(dist_sq)
+                                    normal = delta / dist
+
+                                penetration = radius - dist
+                                if penetration <= 0.0:
+                                    continue
+
+                                free_i = free_dof[idx]
+                                free_j = free_dof[other]
+                                has_i = bool(np.any(free_i))
+                                has_j = bool(np.any(free_j))
+                                if not has_i and not has_j:
+                                    continue
+
+                                if has_i and has_j:
+                                    share_i = share_j = 0.5
+                                elif has_i:
+                                    share_i, share_j = 1.0, 0.0
+                                else:
+                                    share_i, share_j = 0.0, 1.0
+
+                                correction_i = -normal * (share_i * penetration)
+                                correction_j = normal * (share_j * penetration)
+                                correction_i = np.where(free_i, correction_i, 0.0)
+                                correction_j = np.where(free_j, correction_j, 0.0)
+
+                                if np.any(correction_i):
+                                    positions[idx] += correction_i
+                                    vel_i = self.velocities[idx]
+                                    normal_component_i = np.dot(vel_i, normal)
+                                    vel_i = vel_i - normal_component_i * normal
+                                    self.velocities[idx] = np.where(
+                                        free_i, vel_i, self.velocities[idx]
+                                    )
+
+                                if np.any(correction_j):
+                                    positions[other] += correction_j
+                                    vel_j = self.velocities[other]
+                                    normal_component_j = np.dot(vel_j, normal)
+                                    vel_j = vel_j - normal_component_j * normal
+                                    self.velocities[other] = np.where(
+                                        free_j, vel_j, self.velocities[other]
+                                    )
