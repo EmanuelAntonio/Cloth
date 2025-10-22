@@ -66,7 +66,9 @@ Cloth3D::Cloth3D(
     worker_count_(std::max(worker_count, 1)),
     velocities_(mesh->positions.size(), Vec3(0.0, 0.0, 0.0)),
     rest_lengths_(mesh->edges.size(), 0.0),
-    self_collision_distance_sq_(self_collision_distance * self_collision_distance)
+    self_collision_distance_sq_(self_collision_distance * self_collision_distance),
+    constraint_lambdas_(mesh->edges.size(), 0.0),
+    implicit_iterations_(8)
 {
     if (!mesh_) {
         throw std::invalid_argument("mesh pointer cannot be null");
@@ -101,6 +103,88 @@ Cloth3D::Cloth3D(
 }
 
 void Cloth3D::ComputeStep() {
+    auto& positions = mesh_->positions;
+    auto& free_dof = mesh_->free_dof;
+    const auto& initial = mesh_->InitialPositions();
+
+    if (constraint_lambdas_.size() != mesh_->edges.size()) {
+        constraint_lambdas_.assign(mesh_->edges.size(), 0.0);
+    }
+
+    std::vector<Vec3> predicted = positions;
+
+    for (std::size_t idx = 0; idx < positions.size(); ++idx) {
+        const auto& mask = free_dof[idx];
+        Vec3 accel = gravity_;
+        if (!mask[0]) {
+            accel.x = 0.0;
+        }
+        if (!mask[1]) {
+            accel.y = 0.0;
+        }
+        if (!mask[2]) {
+            accel.z = 0.0;
+        }
+
+        velocities_[idx] += accel * time_step_;
+        velocities_[idx] *= (1.0 - damping_);
+
+        Vec3 delta = velocities_[idx] * time_step_;
+        delta = ClampAxis(delta, mask);
+        predicted[idx] += delta;
+
+        if (!mask[0]) {
+            predicted[idx].x = initial[idx].x;
+            velocities_[idx].x = 0.0;
+        }
+        if (!mask[1]) {
+            predicted[idx].y = initial[idx].y;
+            velocities_[idx].y = 0.0;
+        }
+        if (!mask[2]) {
+            predicted[idx].z = initial[idx].z;
+            velocities_[idx].z = 0.0;
+        }
+    }
+
+    for (double& lambda : constraint_lambdas_) {
+        lambda = 0.0;
+    }
+
+    ProjectSpringsImplicit(predicted);
+
+    for (std::size_t idx = 0; idx < positions.size(); ++idx) {
+        Vec3 displacement = predicted[idx] - positions[idx];
+        const auto& mask = free_dof[idx];
+        displacement = ClampAxis(displacement, mask);
+        positions[idx] += displacement;
+        if (time_step_ > 0.0) {
+            velocities_[idx] = displacement / time_step_;
+        }
+    }
+
+    EnforceMaxStretch();
+    ResolveSelfCollisions();
+    ResolveColliders();
+
+    for (std::size_t idx = 0; idx < positions.size(); ++idx) {
+        const auto& mask = free_dof[idx];
+        if (!mask[0]) {
+            positions[idx].x = initial[idx].x;
+            velocities_[idx].x = 0.0;
+        }
+        if (!mask[1]) {
+            positions[idx].y = initial[idx].y;
+            velocities_[idx].y = 0.0;
+        }
+        if (!mask[2]) {
+            positions[idx].z = initial[idx].z;
+            velocities_[idx].z = 0.0;
+        }
+    }
+}
+
+void Cloth3D::ComputeStepOld() {
     auto& positions = mesh_->positions;
     std::vector<Vec3> forces(positions.size(), Vec3(0.0, 0.0, 0.0));
 
@@ -401,6 +485,61 @@ void Cloth3D::ResolveSelfCollisions() {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+void Cloth3D::ProjectSpringsImplicit(std::vector<Vec3>& predicted_positions) {
+    if (mesh_->edges.empty()) {
+        return;
+    }
+
+    const double inv_mass = (mass_ > 0.0) ? (1.0 / mass_) : 0.0;
+    const double compliance = 1.0 / std::max(spring_k_, 1e-6);
+    const double alpha = compliance / (time_step_ * time_step_);
+
+    for (int iter = 0; iter < implicit_iterations_; ++iter) {
+        for (std::size_t edge_index = 0; edge_index < mesh_->edges.size(); ++edge_index) {
+            const auto& edge = mesh_->edges[edge_index];
+            int i = edge.first;
+            int j = edge.second;
+
+            Vec3 delta = predicted_positions[j] - predicted_positions[i];
+            double length = delta.Norm();
+            if (length == 0.0) {
+                continue;
+            }
+
+            const auto& free_i = mesh_->free_dof[i];
+            const auto& free_j = mesh_->free_dof[j];
+            bool movable_i = free_i[0] || free_i[1] || free_i[2];
+            bool movable_j = free_j[0] || free_j[1] || free_j[2];
+            if (!movable_i && !movable_j) {
+                continue;
+            }
+
+            Vec3 direction = delta / length;
+            double constraint = length - rest_lengths_[edge_index];
+
+            double w_i = movable_i ? inv_mass : 0.0;
+            double w_j = movable_j ? inv_mass : 0.0;
+            double denom = w_i + w_j + alpha;
+            if (denom <= 0.0) {
+                continue;
+            }
+
+            double dlambda = -(constraint + alpha * constraint_lambdas_[edge_index]) / denom;
+            constraint_lambdas_[edge_index] += dlambda;
+
+            Vec3 correction = direction * dlambda;
+            if (movable_i) {
+                Vec3 move_i = ClampAxis(correction * w_i, free_i);
+                predicted_positions[i] += move_i;
+            }
+            if (movable_j) {
+                Vec3 move_j = ClampAxis(correction * w_j, free_j);
+                predicted_positions[j] -= move_j;
             }
         }
     }

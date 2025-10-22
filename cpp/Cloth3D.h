@@ -32,6 +32,7 @@ public:
     );
 
     void ComputeStep();
+    void ComputeStepOld();
 
     Mesh3D& Mesh() { return *mesh_; }
     const Mesh3D& Mesh() const { return *mesh_; }
@@ -55,9 +56,12 @@ private:
     std::vector<double> rest_lengths_;
     double self_collision_distance_sq_;
     std::unordered_set<std::uint64_t> edge_lookup_;
+    std::vector<double> constraint_lambdas_;
+    int implicit_iterations_;
 
     void AccumulateSpringForces(std::vector<Vec3>& out_forces) const;
     void EnforceMaxStretch();
     void ResolveColliders();
     void ResolveSelfCollisions();
+    void ProjectSpringsImplicit(std::vector<Vec3>& predicted_positions);
 };

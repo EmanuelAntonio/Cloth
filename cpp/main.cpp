@@ -12,16 +12,16 @@
 #include <vector>
 
 struct Options {
-    double size = 2.0;
-    int subdivisions = 200;
-    double spring = 200.0;
-    double timestep = 1.0 / 400.0;
+    double size = 4.0;
+    int subdivisions = 100;
+    double spring = 800.0;
+    double timestep = 1.0 / 1300.0;
     std::optional<double> max_stretch;
     double max_stretch_relaxation = 1;
     std::string scenario = "sphere";
     double sphere_radius = 0.6;
     double drop_height = 0.8;
-    double self_collision_distance = 0.01;
+    double self_collision_distance = 0.02;
     int self_collision_iterations = 1;
     int workers = 4;
 };
@@ -131,7 +131,8 @@ int main(int argc, char** argv) {
             colliders.push_back({Vec3(0.0, 0.0, 0.0), opts.sphere_radius});
         }
 
-        float mass_cloth = 1/((float)(opts.subdivisions * opts.subdivisions));
+        float mass_cloth = 10 / (static_cast<float>(opts.subdivisions * opts.subdivisions));
+        std::cout << mass_cloth << std::endl;
 
         Cloth3D cloth(
             &mesh,
