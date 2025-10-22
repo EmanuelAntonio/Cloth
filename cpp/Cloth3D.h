@@ -34,6 +34,8 @@ public:
     void ComputeStep();
     void ComputeStepOld();
 
+    double ComputeCFLTimeStep() const;
+
     Mesh3D& Mesh() { return *mesh_; }
     const Mesh3D& Mesh() const { return *mesh_; }
     const std::vector<SphereCollider>& Colliders() const { return colliders_; }

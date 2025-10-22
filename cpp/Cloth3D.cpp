@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -207,52 +208,61 @@ void Cloth3D::AccumulateSpringForces(std::vector<Vec3>& out_forces) const {
     const auto& positions = mesh_->positions;
     const auto& edges = mesh_->edges;
 
-    auto accumulate_range = [&](std::size_t start, std::size_t end, std::vector<Vec3>& target) {
-        for (std::size_t edge_index = start; edge_index < end; ++edge_index) {
-            const auto& edge = edges[edge_index];
-            int i = edge.first;
-            int j = edge.second;
-            Vec3 delta = positions[j] - positions[i];
-            double length = delta.Norm();
-            if (length == 0.0) {
-                continue;
-            }
-            Vec3 direction = delta / length;
-            double rest = rest_lengths_[edge_index];
-            double force_magnitude = spring_k_ * (length - rest);
-            Vec3 force = direction * force_magnitude;
-            target[i] += force;
-            target[j] -= force;
+    auto accumulate_single = [&](std::size_t edge_index, std::vector<Vec3>& target) {
+        const auto& edge = edges[edge_index];
+        int i = edge.first;
+        int j = edge.second;
+        Vec3 delta = positions[j] - positions[i];
+        double length = delta.Norm();
+        if (length == 0.0) {
+            return;
         }
+        Vec3 direction = delta / length;
+        double rest = rest_lengths_[edge_index];
+        double force_magnitude = spring_k_ * (length - rest);
+        Vec3 force = direction * force_magnitude;
+        target[i] += force;
+        target[j] -= force;
     };
 
     if (worker_count_ <= 1) {
-        accumulate_range(0, edges.size(), out_forces);
+        for (std::size_t edge_index = 0; edge_index < edges.size(); ++edge_index) {
+            accumulate_single(edge_index, out_forces);
+        }
         return;
     }
 
 #ifdef _OPENMP
-    std::vector<Vec3> total(out_forces.size(), Vec3(0.0, 0.0, 0.0));
-    omp_set_num_threads(worker_count_);
-#pragma omp parallel
-    {
-        std::vector<Vec3> local(out_forces.size(), Vec3(0.0, 0.0, 0.0));
-#pragma omp for nowait
-        for (int edge_index = 0; edge_index < static_cast<int>(edges.size()); ++edge_index) {
-            accumulate_range(edge_index, edge_index + 1, local);
+    int available_threads = omp_get_max_threads();
+    int desired_threads = std::min(worker_count_, available_threads);
+    if (desired_threads <= 1) {
+        for (std::size_t edge_index = 0; edge_index < edges.size(); ++edge_index) {
+            accumulate_single(edge_index, out_forces);
         }
-#pragma omp critical
-        {
-            for (std::size_t idx = 0; idx < total.size(); ++idx) {
-                total[idx] += local[idx];
-            }
+        return;
+    }
+
+    std::vector<std::vector<Vec3>> partial(desired_threads, std::vector<Vec3>(out_forces.size(), Vec3(0.0, 0.0, 0.0)));
+
+#pragma omp parallel num_threads(desired_threads)
+    {
+        int tid = omp_get_thread_num();
+        auto& local = partial[tid];
+#pragma omp for schedule(static)
+        for (int edge_index = 0; edge_index < static_cast<int>(edges.size()); ++edge_index) {
+            accumulate_single(static_cast<std::size_t>(edge_index), local);
         }
     }
-    for (std::size_t idx = 0; idx < total.size(); ++idx) {
-        out_forces[idx] += total[idx];
+
+    for (const auto& local : partial) {
+        for (std::size_t idx = 0; idx < local.size(); ++idx) {
+            out_forces[idx] += local[idx];
+        }
     }
 #else
-    accumulate_range(0, edges.size(), out_forces);
+    for (std::size_t edge_index = 0; edge_index < edges.size(); ++edge_index) {
+        accumulate_single(edge_index, out_forces);
+    }
 #endif
 }
 
@@ -479,6 +489,31 @@ void Cloth3D::ApplyAxisConstraints(std::vector<Vec3>& values) const {
             values[idx].z = 0.0;
         }
     }
+}
+
+double Cloth3D::ComputeCFLTimeStep() const {
+    if (spring_k_ <= 0.0) {
+        return std::numeric_limits<double>::infinity();
+    }
+
+    double max_stiffness = 0.0;
+    std::vector<double> per_vertex(mesh_->positions.size(), 0.0);
+    for (const auto& edge : mesh_->edges) {
+        per_vertex[edge.first] += spring_k_;
+        per_vertex[edge.second] += spring_k_;
+    }
+    for (double value : per_vertex) {
+        if (value > max_stiffness) {
+            max_stiffness = value;
+        }
+    }
+
+    if (max_stiffness <= 0.0 || mass_ <= 0.0) {
+        return std::numeric_limits<double>::infinity();
+    }
+
+    double dt = std::sqrt(mass_ / max_stiffness);
+    return dt;
 }
 
 void Cloth3D::ApplyStiffnessMatrix(const std::vector<Vec3>& input, std::vector<Vec3>& output) const {
