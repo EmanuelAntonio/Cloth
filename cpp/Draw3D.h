@@ -17,6 +17,11 @@ public:
     );
 
     void Run();
+    void Display();
+    void Idle();
+    void Reshape(int width, int height);
+    void MouseButton(int button, int state, int x, int y);
+    void MouseMotion(int x, int y);
 
 private:
     Mesh3D* mesh_;
@@ -36,11 +41,6 @@ private:
     int last_mouse_y_;
 
     std::pair<Vec3, Vec3> ComputeCamera() const;
-    void Display();
-    void Idle();
-    void Reshape(int width, int height);
-    void MouseButton(int button, int state, int x, int y);
-    void MouseMotion(int x, int y);
     void DrawClothSurface();
     void DrawColliders();
     void DrawSphere(const SphereCollider& collider, int slices = 36, int stacks = 18);
