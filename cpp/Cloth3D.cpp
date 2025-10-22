@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -66,9 +67,7 @@ Cloth3D::Cloth3D(
     worker_count_(std::max(worker_count, 1)),
     velocities_(mesh->positions.size(), Vec3(0.0, 0.0, 0.0)),
     rest_lengths_(mesh->edges.size(), 0.0),
-    self_collision_distance_sq_(self_collision_distance * self_collision_distance),
-    constraint_lambdas_(mesh->edges.size(), 0.0),
-    implicit_iterations_(8)
+    self_collision_distance_sq_(self_collision_distance * self_collision_distance)
 {
     if (!mesh_) {
         throw std::invalid_argument("mesh pointer cannot be null");
@@ -104,82 +103,60 @@ Cloth3D::Cloth3D(
 
 void Cloth3D::ComputeStep() {
     auto& positions = mesh_->positions;
-    auto& free_dof = mesh_->free_dof;
-    const auto& initial = mesh_->InitialPositions();
+    std::size_t count = positions.size();
 
-    if (constraint_lambdas_.size() != mesh_->edges.size()) {
-        constraint_lambdas_.assign(mesh_->edges.size(), 0.0);
+    std::vector<Vec3> spring_forces(count, Vec3(0.0, 0.0, 0.0));
+    AccumulateSpringForces(spring_forces);
+
+    std::vector<Vec3> total_forces = spring_forces;
+    for (std::size_t idx = 0; idx < count; ++idx) {
+        const auto& mask = mesh_->free_dof[idx];
+        if (mask[0]) {
+            total_forces[idx].x += gravity_.x * mass_;
+        }
+        if (mask[1]) {
+            total_forces[idx].y += gravity_.y * mass_;
+        }
+        if (mask[2]) {
+            total_forces[idx].z += gravity_.z * mass_;
+        }
     }
 
-    std::vector<Vec3> predicted = positions;
+    std::vector<Vec3> rhs(count, Vec3(0.0, 0.0, 0.0));
+    for (std::size_t idx = 0; idx < count; ++idx) {
+        rhs[idx] = velocities_[idx] * (mass_ * time_step_) + total_forces[idx] * (time_step_ * time_step_);
+    }
+    ApplyAxisConstraints(rhs);
 
-    for (std::size_t idx = 0; idx < positions.size(); ++idx) {
-        const auto& mask = free_dof[idx];
-        Vec3 accel = gravity_;
-        if (!mask[0]) {
-            accel.x = 0.0;
-        }
-        if (!mask[1]) {
-            accel.y = 0.0;
-        }
-        if (!mask[2]) {
-            accel.z = 0.0;
-        }
+    std::vector<Vec3> delta(count, Vec3(0.0, 0.0, 0.0));
+    ConjugateGradientSolve(rhs, delta);
 
-        velocities_[idx] += accel * time_step_;
+    for (std::size_t idx = 0; idx < count; ++idx) {
+        positions[idx] += delta[idx];
+        velocities_[idx] = delta[idx] / time_step_;
         velocities_[idx] *= (1.0 - damping_);
-
-        Vec3 delta = velocities_[idx] * time_step_;
-        delta = ClampAxis(delta, mask);
-        predicted[idx] += delta;
-
-        if (!mask[0]) {
-            predicted[idx].x = initial[idx].x;
-            velocities_[idx].x = 0.0;
-        }
-        if (!mask[1]) {
-            predicted[idx].y = initial[idx].y;
-            velocities_[idx].y = 0.0;
-        }
-        if (!mask[2]) {
-            predicted[idx].z = initial[idx].z;
-            velocities_[idx].z = 0.0;
-        }
-    }
-
-    for (double& lambda : constraint_lambdas_) {
-        lambda = 0.0;
-    }
-
-    ProjectSpringsImplicit(predicted);
-
-    for (std::size_t idx = 0; idx < positions.size(); ++idx) {
-        Vec3 displacement = predicted[idx] - positions[idx];
-        const auto& mask = free_dof[idx];
-        displacement = ClampAxis(displacement, mask);
-        positions[idx] += displacement;
-        if (time_step_ > 0.0) {
-            velocities_[idx] = displacement / time_step_;
-        }
     }
 
     EnforceMaxStretch();
     ResolveSelfCollisions();
     ResolveColliders();
 
+    const auto& initial = mesh_->InitialPositions();
+    auto& free_dof = mesh_->free_dof;
     for (std::size_t idx = 0; idx < positions.size(); ++idx) {
-        const auto& mask = free_dof[idx];
-        if (!mask[0]) {
-            positions[idx].x = initial[idx].x;
-            velocities_[idx].x = 0.0;
-        }
-        if (!mask[1]) {
-            positions[idx].y = initial[idx].y;
-            velocities_[idx].y = 0.0;
-        }
-        if (!mask[2]) {
-            positions[idx].z = initial[idx].z;
-            velocities_[idx].z = 0.0;
+        for (int axis = 0; axis < 3; ++axis) {
+            if (!free_dof[idx][axis]) {
+                if (axis == 0) {
+                    positions[idx].x = initial[idx].x;
+                    velocities_[idx].x = 0.0;
+                } else if (axis == 1) {
+                    positions[idx].y = initial[idx].y;
+                    velocities_[idx].y = 0.0;
+                } else {
+                    positions[idx].z = initial[idx].z;
+                    velocities_[idx].z = 0.0;
+                }
+            }
         }
     }
 }
@@ -231,52 +208,61 @@ void Cloth3D::AccumulateSpringForces(std::vector<Vec3>& out_forces) const {
     const auto& positions = mesh_->positions;
     const auto& edges = mesh_->edges;
 
-    auto accumulate_range = [&](std::size_t start, std::size_t end, std::vector<Vec3>& target) {
-        for (std::size_t edge_index = start; edge_index < end; ++edge_index) {
-            const auto& edge = edges[edge_index];
-            int i = edge.first;
-            int j = edge.second;
-            Vec3 delta = positions[j] - positions[i];
-            double length = delta.Norm();
-            if (length == 0.0) {
-                continue;
-            }
-            Vec3 direction = delta / length;
-            double rest = rest_lengths_[edge_index];
-            double force_magnitude = spring_k_ * (length - rest);
-            Vec3 force = direction * force_magnitude;
-            target[i] += force;
-            target[j] -= force;
+    auto accumulate_single = [&](std::size_t edge_index, std::vector<Vec3>& target) {
+        const auto& edge = edges[edge_index];
+        int i = edge.first;
+        int j = edge.second;
+        Vec3 delta = positions[j] - positions[i];
+        double length = delta.Norm();
+        if (length == 0.0) {
+            return;
         }
+        Vec3 direction = delta / length;
+        double rest = rest_lengths_[edge_index];
+        double force_magnitude = spring_k_ * (length - rest);
+        Vec3 force = direction * force_magnitude;
+        target[i] += force;
+        target[j] -= force;
     };
 
     if (worker_count_ <= 1) {
-        accumulate_range(0, edges.size(), out_forces);
+        for (std::size_t edge_index = 0; edge_index < edges.size(); ++edge_index) {
+            accumulate_single(edge_index, out_forces);
+        }
         return;
     }
 
 #ifdef _OPENMP
-    std::vector<Vec3> total(out_forces.size(), Vec3(0.0, 0.0, 0.0));
-    omp_set_num_threads(worker_count_);
-#pragma omp parallel
-    {
-        std::vector<Vec3> local(out_forces.size(), Vec3(0.0, 0.0, 0.0));
-#pragma omp for nowait
-        for (int edge_index = 0; edge_index < static_cast<int>(edges.size()); ++edge_index) {
-            accumulate_range(edge_index, edge_index + 1, local);
+    int available_threads = omp_get_max_threads();
+    int desired_threads = std::min(worker_count_, available_threads);
+    if (desired_threads <= 1) {
+        for (std::size_t edge_index = 0; edge_index < edges.size(); ++edge_index) {
+            accumulate_single(edge_index, out_forces);
         }
-#pragma omp critical
-        {
-            for (std::size_t idx = 0; idx < total.size(); ++idx) {
-                total[idx] += local[idx];
-            }
+        return;
+    }
+
+    std::vector<std::vector<Vec3>> partial(desired_threads, std::vector<Vec3>(out_forces.size(), Vec3(0.0, 0.0, 0.0)));
+
+#pragma omp parallel num_threads(desired_threads)
+    {
+        int tid = omp_get_thread_num();
+        auto& local = partial[tid];
+#pragma omp for schedule(static)
+        for (int edge_index = 0; edge_index < static_cast<int>(edges.size()); ++edge_index) {
+            accumulate_single(static_cast<std::size_t>(edge_index), local);
         }
     }
-    for (std::size_t idx = 0; idx < total.size(); ++idx) {
-        out_forces[idx] += total[idx];
+
+    for (const auto& local : partial) {
+        for (std::size_t idx = 0; idx < local.size(); ++idx) {
+            out_forces[idx] += local[idx];
+        }
     }
 #else
-    accumulate_range(0, edges.size(), out_forces);
+    for (std::size_t edge_index = 0; edge_index < edges.size(); ++edge_index) {
+        accumulate_single(edge_index, out_forces);
+    }
 #endif
 }
 
@@ -490,57 +476,156 @@ void Cloth3D::ResolveSelfCollisions() {
     }
 }
 
-void Cloth3D::ProjectSpringsImplicit(std::vector<Vec3>& predicted_positions) {
-    if (mesh_->edges.empty()) {
+void Cloth3D::ApplyAxisConstraints(std::vector<Vec3>& values) const {
+    for (std::size_t idx = 0; idx < values.size(); ++idx) {
+        const auto& mask = mesh_->free_dof[idx];
+        if (!mask[0]) {
+            values[idx].x = 0.0;
+        }
+        if (!mask[1]) {
+            values[idx].y = 0.0;
+        }
+        if (!mask[2]) {
+            values[idx].z = 0.0;
+        }
+    }
+}
+
+double Cloth3D::ComputeCFLTimeStep() const {
+    if (spring_k_ <= 0.0) {
+        return std::numeric_limits<double>::infinity();
+    }
+
+    double max_stiffness = 0.0;
+    std::vector<double> per_vertex(mesh_->positions.size(), 0.0);
+    for (const auto& edge : mesh_->edges) {
+        per_vertex[edge.first] += spring_k_;
+        per_vertex[edge.second] += spring_k_;
+    }
+    for (double value : per_vertex) {
+        if (value > max_stiffness) {
+            max_stiffness = value;
+        }
+    }
+
+    if (max_stiffness <= 0.0 || mass_ <= 0.0) {
+        return std::numeric_limits<double>::infinity();
+    }
+
+    double dt = std::sqrt(mass_ / max_stiffness);
+    return dt;
+}
+
+void Cloth3D::ApplyStiffnessMatrix(const std::vector<Vec3>& input, std::vector<Vec3>& output) const {
+    const auto& positions = mesh_->positions;
+    const auto& edges = mesh_->edges;
+    std::fill(output.begin(), output.end(), Vec3(0.0, 0.0, 0.0));
+
+    if (spring_k_ <= 0.0) {
         return;
     }
 
-    const double inv_mass = (mass_ > 0.0) ? (1.0 / mass_) : 0.0;
-    const double compliance = 1.0 / std::max(spring_k_, 1e-6);
-    const double alpha = compliance / (time_step_ * time_step_);
+    for (std::size_t edge_index = 0; edge_index < edges.size(); ++edge_index) {
+        const auto& edge = edges[edge_index];
+        int i = edge.first;
+        int j = edge.second;
 
-    for (int iter = 0; iter < implicit_iterations_; ++iter) {
-        for (std::size_t edge_index = 0; edge_index < mesh_->edges.size(); ++edge_index) {
-            const auto& edge = mesh_->edges[edge_index];
-            int i = edge.first;
-            int j = edge.second;
-
-            Vec3 delta = predicted_positions[j] - predicted_positions[i];
-            double length = delta.Norm();
-            if (length == 0.0) {
-                continue;
-            }
-
-            const auto& free_i = mesh_->free_dof[i];
-            const auto& free_j = mesh_->free_dof[j];
-            bool movable_i = free_i[0] || free_i[1] || free_i[2];
-            bool movable_j = free_j[0] || free_j[1] || free_j[2];
-            if (!movable_i && !movable_j) {
-                continue;
-            }
-
-            Vec3 direction = delta / length;
-            double constraint = length - rest_lengths_[edge_index];
-
-            double w_i = movable_i ? inv_mass : 0.0;
-            double w_j = movable_j ? inv_mass : 0.0;
-            double denom = w_i + w_j + alpha;
-            if (denom <= 0.0) {
-                continue;
-            }
-
-            double dlambda = -(constraint + alpha * constraint_lambdas_[edge_index]) / denom;
-            constraint_lambdas_[edge_index] += dlambda;
-
-            Vec3 correction = direction * dlambda;
-            if (movable_i) {
-                Vec3 move_i = ClampAxis(correction * w_i, free_i);
-                predicted_positions[i] += move_i;
-            }
-            if (movable_j) {
-                Vec3 move_j = ClampAxis(correction * w_j, free_j);
-                predicted_positions[j] -= move_j;
-            }
+        Vec3 x = positions[j] - positions[i];
+        double length = x.Norm();
+        double rest = rest_lengths_[edge_index];
+        if (length < 1e-6) {
+            continue;
         }
+
+        double s = 1.0 - rest / length;
+        Vec3 diff = input[j] - input[i];
+        Vec3 contribution = diff * s;
+        double dot = Dot(x, diff);
+        double coeff = (rest > 0.0) ? (rest / (length * length * length)) : 0.0;
+        contribution += x * (coeff * dot);
+        contribution *= spring_k_;
+
+        output[i] += contribution;
+        output[j] -= contribution;
+    }
+}
+
+void Cloth3D::ApplyImplicitMatrix(const std::vector<Vec3>& input, std::vector<Vec3>& output) const {
+    std::size_t count = input.size();
+    output.assign(count, Vec3(0.0, 0.0, 0.0));
+
+    for (std::size_t idx = 0; idx < count; ++idx) {
+        output[idx] = input[idx] * mass_;
+    }
+
+    std::vector<Vec3> stiffness(count, Vec3(0.0, 0.0, 0.0));
+    ApplyStiffnessMatrix(input, stiffness);
+
+    double scale = time_step_ * time_step_;
+    for (std::size_t idx = 0; idx < count; ++idx) {
+        output[idx] -= stiffness[idx] * scale;
+    }
+
+    ApplyAxisConstraints(output);
+}
+
+void Cloth3D::ConjugateGradientSolve(const std::vector<Vec3>& rhs, std::vector<Vec3>& solution) const {
+    std::size_t count = rhs.size();
+    if (solution.size() != count) {
+        solution.assign(count, Vec3(0.0, 0.0, 0.0));
+    } else {
+        std::fill(solution.begin(), solution.end(), Vec3(0.0, 0.0, 0.0));
+    }
+
+    auto dot_product = [](const std::vector<Vec3>& a, const std::vector<Vec3>& b) {
+        double sum = 0.0;
+        for (std::size_t idx = 0; idx < a.size(); ++idx) {
+            sum += Dot(a[idx], b[idx]);
+        }
+        return sum;
+    };
+
+    std::vector<Vec3> residual = rhs;
+    ApplyAxisConstraints(residual);
+    std::vector<Vec3> direction = residual;
+    std::vector<Vec3> temp(count, Vec3(0.0, 0.0, 0.0));
+
+    double rhs_norm = std::sqrt(std::max(dot_product(rhs, rhs), 0.0));
+    if (rhs_norm < 1e-9) {
+        return;
+    }
+
+    double residual_norm_sq = dot_product(residual, residual);
+    double tolerance = (rhs_norm * 1e-6);
+    tolerance *= tolerance;
+
+    const int max_iterations = std::min<int>(200, std::max<int>(32, static_cast<int>(mesh_->edges.size())));
+
+    for (int iter = 0; iter < max_iterations && residual_norm_sq > tolerance; ++iter) {
+        ApplyImplicitMatrix(direction, temp);
+        double denom = dot_product(direction, temp);
+        if (std::abs(denom) < 1e-12) {
+            break;
+        }
+        double alpha = residual_norm_sq / denom;
+
+        for (std::size_t idx = 0; idx < count; ++idx) {
+            solution[idx] += direction[idx] * alpha;
+            residual[idx] -= temp[idx] * alpha;
+        }
+        ApplyAxisConstraints(solution);
+        ApplyAxisConstraints(residual);
+
+        double new_residual_norm_sq = dot_product(residual, residual);
+        if (new_residual_norm_sq <= tolerance) {
+            break;
+        }
+
+        double beta = new_residual_norm_sq / residual_norm_sq;
+        for (std::size_t idx = 0; idx < count; ++idx) {
+            direction[idx] = residual[idx] + direction[idx] * beta;
+        }
+        ApplyAxisConstraints(direction);
+        residual_norm_sq = new_residual_norm_sq;
     }
 }
