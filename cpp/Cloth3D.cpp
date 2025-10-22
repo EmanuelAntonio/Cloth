@@ -101,40 +101,44 @@ Cloth3D::Cloth3D(
     }
 }
 
-void Cloth3D::ComputeStep() {
+void Cloth3D::ComputeStepImplicit() {
     auto& positions = mesh_->positions;
-    std::size_t count = positions.size();
+    const std::size_t count = positions.size();
+    if (count == 0) {
+        return;
+    }
 
-    std::vector<Vec3> spring_forces(count, Vec3(0.0, 0.0, 0.0));
-    AccumulateSpringForces(spring_forces);
+    std::vector<Vec3> forces(count, Vec3(0.0, 0.0, 0.0));
+    AccumulateSpringForces(forces);
 
-    std::vector<Vec3> total_forces = spring_forces;
     for (std::size_t idx = 0; idx < count; ++idx) {
-        const auto& mask = mesh_->free_dof[idx];
-        if (mask[0]) {
-            total_forces[idx].x += gravity_.x * mass_;
-        }
-        if (mask[1]) {
-            total_forces[idx].y += gravity_.y * mass_;
-        }
-        if (mask[2]) {
-            total_forces[idx].z += gravity_.z * mass_;
+        if (mesh_->AxisIsFree(static_cast<int>(idx), 2)) {
+            forces[idx] += gravity_ * mass_;
         }
     }
 
     std::vector<Vec3> rhs(count, Vec3(0.0, 0.0, 0.0));
     for (std::size_t idx = 0; idx < count; ++idx) {
-        rhs[idx] = velocities_[idx] * (mass_ * time_step_) + total_forces[idx] * (time_step_ * time_step_);
+        rhs[idx] = velocities_[idx] * mass_ + forces[idx] * time_step_;
     }
-    ApplyAxisConstraints(rhs);
+    ApplyConstraintMask(rhs);
 
-    std::vector<Vec3> delta(count, Vec3(0.0, 0.0, 0.0));
-    ConjugateGradientSolve(rhs, delta);
+    std::vector<Vec3> solution = velocities_;
+    ApplyConstraintMask(solution);
 
+    if (!ConjugateGradient(solution, rhs)) {
+        ComputeStepExplicit();
+        return;
+    }
+
+    velocities_ = solution;
+    ApplyConstraintMask(velocities_);
+
+    for (auto& velocity : velocities_) {
+        velocity *= (1.0 - damping_);
+    }
     for (std::size_t idx = 0; idx < count; ++idx) {
-        positions[idx] += delta[idx];
-        velocities_[idx] = delta[idx] / time_step_;
-        velocities_[idx] *= (1.0 - damping_);
+        positions[idx] += velocities_[idx] * time_step_;
     }
 
     EnforceMaxStretch();
@@ -143,7 +147,7 @@ void Cloth3D::ComputeStep() {
 
     const auto& initial = mesh_->InitialPositions();
     auto& free_dof = mesh_->free_dof;
-    for (std::size_t idx = 0; idx < positions.size(); ++idx) {
+    for (std::size_t idx = 0; idx < count; ++idx) {
         for (int axis = 0; axis < 3; ++axis) {
             if (!free_dof[idx][axis]) {
                 if (axis == 0) {
@@ -161,7 +165,7 @@ void Cloth3D::ComputeStep() {
     }
 }
 
-void Cloth3D::ComputeStepOld() {
+void Cloth3D::ComputeStepExplicit() {
     auto& positions = mesh_->positions;
     std::vector<Vec3> forces(positions.size(), Vec3(0.0, 0.0, 0.0));
 
@@ -264,6 +268,133 @@ void Cloth3D::AccumulateSpringForces(std::vector<Vec3>& out_forces) const {
         accumulate_single(edge_index, out_forces);
     }
 #endif
+}
+
+void Cloth3D::ApplyStiffnessMatrix(const std::vector<Vec3>& in, std::vector<Vec3>& out) const {
+    const auto& positions = mesh_->positions;
+    const auto& edges = mesh_->edges;
+    if (out.size() != positions.size()) {
+        out.assign(positions.size(), Vec3(0.0, 0.0, 0.0));
+    }
+    for (auto& value : out) {
+        value = Vec3(0.0, 0.0, 0.0);
+    }
+
+    for (std::size_t edge_index = 0; edge_index < edges.size(); ++edge_index) {
+        const auto& edge = edges[edge_index];
+        int i = edge.first;
+        int j = edge.second;
+        Vec3 delta = positions[j] - positions[i];
+        double length = delta.Norm();
+        if (length == 0.0) {
+            continue;
+        }
+        Vec3 direction = delta / length;
+        Vec3 diff = in[i] - in[j];
+        double projection = Dot(direction, diff);
+        Vec3 contribution = direction * (spring_k_ * projection);
+        out[i] += contribution;
+        out[j] -= contribution;
+    }
+
+    const auto& free_dof = mesh_->free_dof;
+    for (std::size_t idx = 0; idx < out.size(); ++idx) {
+        out[idx] = ClampAxis(out[idx], free_dof[idx]);
+    }
+}
+
+void Cloth3D::ApplyImplicitMatrix(const std::vector<Vec3>& in, std::vector<Vec3>& out, std::vector<Vec3>& scratch) const {
+    const auto& free_dof = mesh_->free_dof;
+    const std::size_t count = mesh_->positions.size();
+    if (out.size() != count) {
+        out.assign(count, Vec3(0.0, 0.0, 0.0));
+    }
+    if (scratch.size() != count) {
+        scratch.assign(count, Vec3(0.0, 0.0, 0.0));
+    }
+
+    for (std::size_t idx = 0; idx < count; ++idx) {
+        Vec3 value = in[idx] * mass_;
+        out[idx] = ClampAxis(value, free_dof[idx]);
+    }
+
+    ApplyStiffnessMatrix(in, scratch);
+    double factor = time_step_ * time_step_;
+    for (std::size_t idx = 0; idx < count; ++idx) {
+        out[idx] -= scratch[idx] * factor;
+        out[idx] = ClampAxis(out[idx], free_dof[idx]);
+    }
+}
+
+void Cloth3D::ApplyConstraintMask(std::vector<Vec3>& vec) const {
+    const auto& free_dof = mesh_->free_dof;
+    const std::size_t count = vec.size();
+    for (std::size_t idx = 0; idx < count; ++idx) {
+        vec[idx] = ClampAxis(vec[idx], free_dof[idx]);
+    }
+}
+
+double Cloth3D::DotProduct(const std::vector<Vec3>& a, const std::vector<Vec3>& b) const {
+    double result = 0.0;
+    const std::size_t count = std::min(a.size(), b.size());
+    for (std::size_t idx = 0; idx < count; ++idx) {
+        result += Dot(a[idx], b[idx]);
+    }
+    return result;
+}
+
+bool Cloth3D::ConjugateGradient(std::vector<Vec3>& x, const std::vector<Vec3>& b) const {
+    const std::size_t count = b.size();
+    if (count == 0) {
+        return true;
+    }
+
+    std::vector<Vec3> r(count, Vec3(0.0, 0.0, 0.0));
+    std::vector<Vec3> p(count, Vec3(0.0, 0.0, 0.0));
+    std::vector<Vec3> Ap(count, Vec3(0.0, 0.0, 0.0));
+    std::vector<Vec3> scratch(count, Vec3(0.0, 0.0, 0.0));
+
+    ApplyImplicitMatrix(x, Ap, scratch);
+    for (std::size_t idx = 0; idx < count; ++idx) {
+        r[idx] = b[idx] - Ap[idx];
+    }
+    ApplyConstraintMask(r);
+    p = r;
+
+    double rhs_norm = std::sqrt(DotProduct(b, b));
+    double tolerance = rhs_norm > 0.0 ? rhs_norm * 1e-6 : 1e-9;
+    double rs_old = DotProduct(r, r);
+    if (std::sqrt(rs_old) <= tolerance) {
+        return true;
+    }
+
+    int max_iterations = std::max<int>(static_cast<int>(count), 50);
+    for (int iteration = 0; iteration < max_iterations; ++iteration) {
+        ApplyImplicitMatrix(p, Ap, scratch);
+        double denom = DotProduct(p, Ap);
+        if (std::abs(denom) < 1e-12) {
+            return false;
+        }
+        double alpha = rs_old / denom;
+        for (std::size_t idx = 0; idx < count; ++idx) {
+            x[idx] += p[idx] * alpha;
+            r[idx] -= Ap[idx] * alpha;
+        }
+        ApplyConstraintMask(x);
+        ApplyConstraintMask(r);
+
+        double rs_new = DotProduct(r, r);
+        if (std::sqrt(rs_new) <= tolerance) {
+            return true;
+        }
+        double beta = rs_new / rs_old;
+        for (std::size_t idx = 0; idx < count; ++idx) {
+            p[idx] = r[idx] + p[idx] * beta;
+        }
+        ApplyConstraintMask(p);
+        rs_old = rs_new;
+    }
+    return false;
 }
 
 void Cloth3D::EnforceMaxStretch() {
@@ -473,22 +604,6 @@ void Cloth3D::ResolveSelfCollisions() {
                 }
             }
         }
-    }
-}
-
-void Cloth3D::ApplyAxisConstraints(std::vector<Vec3>& values) const {
-    for (std::size_t idx = 0; idx < values.size(); ++idx) {
-        const auto& mask = mesh_->free_dof[idx];
-        if (!mask[0]) {
-            values[idx].x = 0.0;
-        }
-        if (!mask[1]) {
-            values[idx].y = 0.0;
-        }
-        if (!mask[2]) {
-            values[idx].z = 0.0;
-        }
-    }
 }
 
 double Cloth3D::ComputeCFLTimeStep() const {
@@ -514,118 +629,4 @@ double Cloth3D::ComputeCFLTimeStep() const {
 
     double dt = std::sqrt(mass_ / max_stiffness);
     return dt;
-}
-
-void Cloth3D::ApplyStiffnessMatrix(const std::vector<Vec3>& input, std::vector<Vec3>& output) const {
-    const auto& positions = mesh_->positions;
-    const auto& edges = mesh_->edges;
-    std::fill(output.begin(), output.end(), Vec3(0.0, 0.0, 0.0));
-
-    if (spring_k_ <= 0.0) {
-        return;
-    }
-
-    for (std::size_t edge_index = 0; edge_index < edges.size(); ++edge_index) {
-        const auto& edge = edges[edge_index];
-        int i = edge.first;
-        int j = edge.second;
-
-        Vec3 x = positions[j] - positions[i];
-        double length = x.Norm();
-        double rest = rest_lengths_[edge_index];
-        if (length < 1e-6) {
-            continue;
-        }
-
-        double s = 1.0 - rest / length;
-        Vec3 diff = input[j] - input[i];
-        Vec3 contribution = diff * s;
-        double dot = Dot(x, diff);
-        double coeff = (rest > 0.0) ? (rest / (length * length * length)) : 0.0;
-        contribution += x * (coeff * dot);
-        contribution *= spring_k_;
-
-        output[i] += contribution;
-        output[j] -= contribution;
-    }
-}
-
-void Cloth3D::ApplyImplicitMatrix(const std::vector<Vec3>& input, std::vector<Vec3>& output) const {
-    std::size_t count = input.size();
-    output.assign(count, Vec3(0.0, 0.0, 0.0));
-
-    for (std::size_t idx = 0; idx < count; ++idx) {
-        output[idx] = input[idx] * mass_;
-    }
-
-    std::vector<Vec3> stiffness(count, Vec3(0.0, 0.0, 0.0));
-    ApplyStiffnessMatrix(input, stiffness);
-
-    double scale = time_step_ * time_step_;
-    for (std::size_t idx = 0; idx < count; ++idx) {
-        output[idx] -= stiffness[idx] * scale;
-    }
-
-    ApplyAxisConstraints(output);
-}
-
-void Cloth3D::ConjugateGradientSolve(const std::vector<Vec3>& rhs, std::vector<Vec3>& solution) const {
-    std::size_t count = rhs.size();
-    if (solution.size() != count) {
-        solution.assign(count, Vec3(0.0, 0.0, 0.0));
-    } else {
-        std::fill(solution.begin(), solution.end(), Vec3(0.0, 0.0, 0.0));
-    }
-
-    auto dot_product = [](const std::vector<Vec3>& a, const std::vector<Vec3>& b) {
-        double sum = 0.0;
-        for (std::size_t idx = 0; idx < a.size(); ++idx) {
-            sum += Dot(a[idx], b[idx]);
-        }
-        return sum;
-    };
-
-    std::vector<Vec3> residual = rhs;
-    ApplyAxisConstraints(residual);
-    std::vector<Vec3> direction = residual;
-    std::vector<Vec3> temp(count, Vec3(0.0, 0.0, 0.0));
-
-    double rhs_norm = std::sqrt(std::max(dot_product(rhs, rhs), 0.0));
-    if (rhs_norm < 1e-9) {
-        return;
-    }
-
-    double residual_norm_sq = dot_product(residual, residual);
-    double tolerance = (rhs_norm * 1e-6);
-    tolerance *= tolerance;
-
-    const int max_iterations = std::min<int>(200, std::max<int>(32, static_cast<int>(mesh_->edges.size())));
-
-    for (int iter = 0; iter < max_iterations && residual_norm_sq > tolerance; ++iter) {
-        ApplyImplicitMatrix(direction, temp);
-        double denom = dot_product(direction, temp);
-        if (std::abs(denom) < 1e-12) {
-            break;
-        }
-        double alpha = residual_norm_sq / denom;
-
-        for (std::size_t idx = 0; idx < count; ++idx) {
-            solution[idx] += direction[idx] * alpha;
-            residual[idx] -= temp[idx] * alpha;
-        }
-        ApplyAxisConstraints(solution);
-        ApplyAxisConstraints(residual);
-
-        double new_residual_norm_sq = dot_product(residual, residual);
-        if (new_residual_norm_sq <= tolerance) {
-            break;
-        }
-
-        double beta = new_residual_norm_sq / residual_norm_sq;
-        for (std::size_t idx = 0; idx < count; ++idx) {
-            direction[idx] = residual[idx] + direction[idx] * beta;
-        }
-        ApplyAxisConstraints(direction);
-        residual_norm_sq = new_residual_norm_sq;
-    }
 }

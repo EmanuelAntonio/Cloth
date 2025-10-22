@@ -31,8 +31,8 @@ public:
         int worker_count = 1
     );
 
-    void ComputeStep();
-    void ComputeStepOld();
+    void ComputeStepImplicit();
+    void ComputeStepExplicit();
 
     double ComputeCFLTimeStep() const;
 
@@ -60,11 +60,12 @@ private:
     std::unordered_set<std::uint64_t> edge_lookup_;
 
     void AccumulateSpringForces(std::vector<Vec3>& out_forces) const;
+    void ApplyStiffnessMatrix(const std::vector<Vec3>& in, std::vector<Vec3>& out) const;
+    void ApplyImplicitMatrix(const std::vector<Vec3>& in, std::vector<Vec3>& out, std::vector<Vec3>& scratch) const;
+    void ApplyConstraintMask(std::vector<Vec3>& vec) const;
+    double DotProduct(const std::vector<Vec3>& a, const std::vector<Vec3>& b) const;
+    bool ConjugateGradient(std::vector<Vec3>& x, const std::vector<Vec3>& b) const;
     void EnforceMaxStretch();
     void ResolveColliders();
     void ResolveSelfCollisions();
-    void ApplyImplicitMatrix(const std::vector<Vec3>& input, std::vector<Vec3>& output) const;
-    void ApplyStiffnessMatrix(const std::vector<Vec3>& input, std::vector<Vec3>& output) const;
-    void ConjugateGradientSolve(const std::vector<Vec3>& rhs, std::vector<Vec3>& solution) const;
-    void ApplyAxisConstraints(std::vector<Vec3>& values) const;
 };
