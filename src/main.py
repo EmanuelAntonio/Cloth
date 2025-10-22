@@ -22,9 +22,9 @@ def create_square_mesh(size: float, subdivisions: int) -> Mesh3D:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="3D cloth simulation demo")
-    parser.add_argument("--size", type=float, default=2.0, help="Side length of the square cloth")
-    parser.add_argument("--subdivisions", type=int, default=10, help="Number of subdivisions per side")
-    parser.add_argument("--spring", type=float, default=800.0, help="Spring constant")
+    parser.add_argument("--size", type=float, default=4.0, help="Side length of the square cloth")
+    parser.add_argument("--subdivisions", type=int, default=20, help="Number of subdivisions per side")
+    parser.add_argument("--spring", type=float, default=2000.0, help="Spring constant")
     parser.add_argument("--timestep", type=float, default=1 / 120.0, help="Integration time step")
     parser.add_argument(
         "--max-stretch",
@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--scenario",
         choices=("cloth", "sphere"),
-        default="cloth",
+        default="sphere",
         help="Choose between the classic fixed-corner cloth or the sphere drop",
     )
     parser.add_argument(
