@@ -13,17 +13,17 @@
 
 struct Options {
     double size = 2.0;
-    int subdivisions = 10;
-    double spring = 800.0;
-    double timestep = 1.0 / 120.0;
+    int subdivisions = 200;
+    double spring = 200.0;
+    double timestep = 1.0 / 400.0;
     std::optional<double> max_stretch;
-    double max_stretch_relaxation = 0.2;
-    std::string scenario = "cloth";
+    double max_stretch_relaxation = 1;
+    std::string scenario = "sphere";
     double sphere_radius = 0.6;
     double drop_height = 0.8;
-    double self_collision_distance = 0.05;
+    double self_collision_distance = 0.01;
     int self_collision_iterations = 1;
-    int workers = 1;
+    int workers = 4;
 };
 
 namespace {
@@ -131,11 +131,13 @@ int main(int argc, char** argv) {
             colliders.push_back({Vec3(0.0, 0.0, 0.0), opts.sphere_radius});
         }
 
+        float mass_cloth = 1/((float)(opts.subdivisions * opts.subdivisions));
+
         Cloth3D cloth(
             &mesh,
             opts.spring,
             opts.timestep,
-            1.0,
+            mass_cloth,
             0.02,
             Vec3(0.0, 0.0, -9.81),
             opts.max_stretch,

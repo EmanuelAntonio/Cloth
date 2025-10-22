@@ -1,7 +1,5 @@
 CXX ?= g++
-CXXFLAGS ?= -std=c++17 -O2
-CXXFLAGS += -fopenmp
-
+CXXFLAGS += -O3 -fomit-frame-pointer -fexpensive-optimizations -m64 -std=c++2b -Iinclude -IEigen -MMD -MP
 CPPFLAGS += -Icpp
 
 PLATFORM ?= $(if $(filter Windows_NT,$(OS)),windows,unix)
@@ -12,35 +10,55 @@ INCLUDEDIR ?= cpp/include
 LDLIBS :=
 
 TARGET_BASE := cloth_sim
-TARGET := $(TARGET_BASE)
+OBJDIR := build/obj
+BINDIR := build/bin
+
+# util: converte paths para Windows (barra invertida)
+wpath = $(subst /,\,$(1))
+
+TARGET_NAME := $(TARGET_BASE)
 
 ifeq ($(PLATFORM),windows)
 CPPFLAGS += -I$(INCLUDEDIR)
 LDFLAGS += -L$(LIBDIR)
-LDLIBS += -lfreeglut -lopengl32 -lglu32 -lwinmm -lgdi32
-TARGET := $(TARGET_BASE).exe
+LDLIBS  += -lgomp -pthread -pthread -lfreeglut -lglu32 -lopengl32 -O3 -m64 cpp/lib/libfreeglut.a
+TARGET_NAME := $(TARGET_BASE).exe
+MKDIR_CMD = if not exist "$(call wpath,$(1))" mkdir "$(call wpath,$(1))"
+RM_BUILD  = rmdir /S /Q "$(call wpath,build)" 2>nul || exit /B 0
 else
-LDLIBS += -lGL -lGLU -lglut
+LDLIBS  += -lGL -lGLU -lglut
+MKDIR_CMD = mkdir -p "$(1)"
+RM_BUILD  = rm -rf build
 endif
 
+TARGET := $(BINDIR)/$(TARGET_NAME)
+
 SOURCES := $(wildcard cpp/*.cpp)
-OBJECTS := $(patsubst cpp/%.cpp,build/%.o,$(SOURCES))
+OBJECTS := $(patsubst cpp/%.cpp,$(OBJDIR)/%.o,$(SOURCES))
+DEPS := $(OBJECTS:.o=.d)
 
 .PHONY: all clean run
 
 all: $(TARGET)
 
-$(TARGET): $(OBJECTS)
+$(TARGET): $(OBJECTS) | $(BINDIR)
 	$(CXX) $(LDFLAGS) $(OBJECTS) $(LDLIBS) -o $@
 
-build:
-	mkdir -p $@
+# cria diretórios de build (compatível Win/Unix)
+$(OBJDIR):
+	@$(call MKDIR_CMD,$@)
+$(BINDIR):
+	@$(call MKDIR_CMD,$@)
 
-build/%.o: cpp/%.cpp | build
+# compila objetos em build/obj
+$(OBJDIR)/%.o: cpp/%.cpp | $(OBJDIR)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
 run: $(TARGET)
-	./$(TARGET)
+	"$(TARGET)"
 
 clean:
-	rm -rf build $(TARGET_BASE) $(TARGET_BASE).exe
+	-@$(RM_BUILD)
+
+# inclui dependências geradas por -MMD -MP
+-include $(DEPS)

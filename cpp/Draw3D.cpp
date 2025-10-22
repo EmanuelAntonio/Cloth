@@ -286,8 +286,8 @@ void Draw3D::DrawSphere(const SphereCollider& collider, int slices, int stacks) 
                 sin_lat1
             );
 
-            Vec3 vertex0 = collider.center + normal0 * collider.radius;
-            Vec3 vertex1 = collider.center + normal1 * collider.radius;
+            Vec3 vertex0 = collider.center + normal0 * collider.radius * 0.95;
+            Vec3 vertex1 = collider.center + normal1 * collider.radius * 0.95;
 
             glNormal3f(static_cast<GLfloat>(normal1.x), static_cast<GLfloat>(normal1.y), static_cast<GLfloat>(normal1.z));
             glVertex3f(static_cast<GLfloat>(vertex1.x), static_cast<GLfloat>(vertex1.y), static_cast<GLfloat>(vertex1.z));
