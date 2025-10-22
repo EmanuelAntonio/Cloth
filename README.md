@@ -14,8 +14,9 @@ Este repositório contém um protótipo de simulação de tecido 3D baseado em u
    ```bash
    python -m src.main
    ```
-   Use as opções `--size`, `--subdivisions`, `--spring`, `--timestep` e `--max-stretch` para ajustar a malha e a simulação.
+   Use as opções `--size`, `--subdivisions`, `--spring`, `--timestep`, `--max-stretch` e `--max-stretch-relaxation` para ajustar a malha e a simulação.
    O parâmetro `--max-stretch` limita o alongamento máximo das molas em relação ao comprimento de repouso (por exemplo, `--max-stretch 1.5`).
+   Já `--max-stretch-relaxation` controla o quanto da correção é aplicada por passo (valores menores deixam o tecido mais flexível).
    Os parâmetros `--self-collision-distance` e `--self-collision-iterations` ativam e configuram o sistema de auto colisão, garantindo que o tecido não atravesse a si mesmo.
 
    O argumento `--scenario` permite alternar entre os cenários disponíveis:

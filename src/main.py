@@ -33,9 +33,15 @@ def parse_args() -> argparse.Namespace:
         help="Optional maximum stretch ratio (>=1.0) applied to each spring",
     )
     parser.add_argument(
+        "--max-stretch-relaxation",
+        type=float,
+        default=0.2,
+        help="Fraction of the stretch correction applied per step (0-1]",
+    )
+    parser.add_argument(
         "--scenario",
         choices=("cloth", "sphere"),
-        default="sphere",
+        default="cloth",
         help="Choose between the classic fixed-corner cloth or the sphere drop",
     )
     parser.add_argument(
@@ -88,6 +94,7 @@ def main() -> None:
         spring_k=args.spring,
         time_step=args.timestep,
         max_stretch_ratio=args.max_stretch,
+        max_stretch_relaxation=args.max_stretch_relaxation,
         colliders=colliders,
         self_collision_distance=args.self_collision_distance,
         self_collision_iterations=args.self_collision_iterations,

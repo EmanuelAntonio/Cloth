@@ -31,6 +31,7 @@ class Cloth3D:
     damping: float = 0.02
     gravity: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, -9.81]))
     max_stretch_ratio: float | None = None
+    max_stretch_relaxation: float = 0.2
     colliders: list[SphereCollider] = field(default_factory=list)
     self_collision_distance: float = 0.05
     self_collision_iterations: int = 1
@@ -42,6 +43,8 @@ class Cloth3D:
             raise ValueError("time_step must be positive")
         if self.max_stretch_ratio is not None and self.max_stretch_ratio < 1.0:
             raise ValueError("max_stretch_ratio must be >= 1.0 or None")
+        if not 0.0 < self.max_stretch_relaxation <= 1.0:
+            raise ValueError("max_stretch_relaxation must be in the range (0, 1]")
         if self.self_collision_distance < 0.0:
             raise ValueError("self_collision_distance must be >= 0")
         if self.self_collision_iterations < 0:
@@ -52,6 +55,7 @@ class Cloth3D:
             np.linalg.norm(self.mesh.positions[j] - self.mesh.positions[i])
             for i, j in self.mesh.edges
         ])
+        self.max_stretch_relaxation = float(self.max_stretch_relaxation)
         self._edge_lookup = {
             (i, j) if i < j else (j, i)
             for i, j in self.mesh.edges
@@ -109,6 +113,7 @@ class Cloth3D:
             return
 
         ratio = self.max_stretch_ratio
+        relaxation = self.max_stretch_relaxation
         positions = self.mesh.positions
 
         for edge_index, (i, j) in enumerate(self.mesh.edges):
@@ -120,7 +125,7 @@ class Cloth3D:
                 continue
 
             direction = delta / length
-            correction_mag = length - max_length
+            correction_mag = (length - max_length) * relaxation
 
             free_i = self.mesh.free_dof[i]
             free_j = self.mesh.free_dof[j]
