@@ -61,10 +61,10 @@ private:
 
     void AccumulateSpringForces(std::vector<Vec3>& out_forces) const;
     void ApplyStiffnessMatrix(const std::vector<Vec3>& in, std::vector<Vec3>& out) const;
-    void ApplyImplicitMatrix(const std::vector<Vec3>& in, std::vector<Vec3>& out, std::vector<Vec3>& scratch) const;
+    void ApplyImplicitMatrix(const std::vector<Vec3>& in, std::vector<Vec3>& out, std::vector<Vec3>& scratch, double dt) const;
     void ApplyConstraintMask(std::vector<Vec3>& vec) const;
     double DotProduct(const std::vector<Vec3>& a, const std::vector<Vec3>& b) const;
-    bool ConjugateGradient(std::vector<Vec3>& x, const std::vector<Vec3>& b) const;
+    bool ConjugateGradient(std::vector<Vec3>& x, const std::vector<Vec3>& b, double dt) const;
     void EnforceMaxStretch();
     void ResolveColliders();
     void ResolveSelfCollisions();

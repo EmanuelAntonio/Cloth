@@ -108,6 +108,12 @@ void Cloth3D::ComputeStepImplicit() {
         return;
     }
 
+    double dt = time_step_;
+    double cfl = ComputeCFLTimeStep();
+    if (std::isfinite(cfl)) {
+        dt = std::min(dt, cfl);
+    }
+
     std::vector<Vec3> forces(count, Vec3(0.0, 0.0, 0.0));
     AccumulateSpringForces(forces);
 
@@ -119,14 +125,14 @@ void Cloth3D::ComputeStepImplicit() {
 
     std::vector<Vec3> rhs(count, Vec3(0.0, 0.0, 0.0));
     for (std::size_t idx = 0; idx < count; ++idx) {
-        rhs[idx] = velocities_[idx] * mass_ + forces[idx] * time_step_;
+        rhs[idx] = velocities_[idx] * mass_ + forces[idx] * dt;
     }
     ApplyConstraintMask(rhs);
 
     std::vector<Vec3> solution = velocities_;
     ApplyConstraintMask(solution);
 
-    if (!ConjugateGradient(solution, rhs)) {
+    if (!ConjugateGradient(solution, rhs, dt)) {
         ComputeStepExplicit();
         return;
     }
@@ -138,7 +144,7 @@ void Cloth3D::ComputeStepImplicit() {
         velocity *= (1.0 - damping_);
     }
     for (std::size_t idx = 0; idx < count; ++idx) {
-        positions[idx] += velocities_[idx] * time_step_;
+        positions[idx] += velocities_[idx] * dt;
     }
 
     EnforceMaxStretch();
@@ -167,6 +173,11 @@ void Cloth3D::ComputeStepImplicit() {
 
 void Cloth3D::ComputeStepExplicit() {
     auto& positions = mesh_->positions;
+    double dt = time_step_;
+    double cfl = ComputeCFLTimeStep();
+    if (std::isfinite(cfl)) {
+        dt = std::min(dt, cfl);
+    }
     std::vector<Vec3> forces(positions.size(), Vec3(0.0, 0.0, 0.0));
 
     AccumulateSpringForces(forces);
@@ -179,9 +190,9 @@ void Cloth3D::ComputeStepExplicit() {
 
     for (std::size_t idx = 0; idx < positions.size(); ++idx) {
         Vec3 acceleration = forces[idx] / mass_;
-        velocities_[idx] += acceleration * time_step_;
+        velocities_[idx] += acceleration * dt;
         velocities_[idx] *= (1.0 - damping_);
-        positions[idx] += velocities_[idx] * time_step_;
+        positions[idx] += velocities_[idx] * dt;
     }
 
     EnforceMaxStretch();
@@ -248,14 +259,11 @@ void Cloth3D::AccumulateSpringForces(std::vector<Vec3>& out_forces) const {
 
     std::vector<std::vector<Vec3>> partial(desired_threads, std::vector<Vec3>(out_forces.size(), Vec3(0.0, 0.0, 0.0)));
 
-#pragma omp parallel num_threads(desired_threads)
-    {
+#pragma omp parallel for schedule(static) num_threads(desired_threads)
+    for (int edge_index = 0; edge_index < static_cast<int>(edges.size()); ++edge_index) {
         int tid = omp_get_thread_num();
         auto& local = partial[tid];
-#pragma omp for schedule(static)
-        for (int edge_index = 0; edge_index < static_cast<int>(edges.size()); ++edge_index) {
-            accumulate_single(static_cast<std::size_t>(edge_index), local);
-        }
+        accumulate_single(static_cast<std::size_t>(edge_index), local);
     }
 
     for (const auto& local : partial) {
@@ -303,7 +311,7 @@ void Cloth3D::ApplyStiffnessMatrix(const std::vector<Vec3>& in, std::vector<Vec3
     }
 }
 
-void Cloth3D::ApplyImplicitMatrix(const std::vector<Vec3>& in, std::vector<Vec3>& out, std::vector<Vec3>& scratch) const {
+void Cloth3D::ApplyImplicitMatrix(const std::vector<Vec3>& in, std::vector<Vec3>& out, std::vector<Vec3>& scratch, double dt) const {
     const auto& free_dof = mesh_->free_dof;
     const std::size_t count = mesh_->positions.size();
     if (out.size() != count) {
@@ -319,7 +327,7 @@ void Cloth3D::ApplyImplicitMatrix(const std::vector<Vec3>& in, std::vector<Vec3>
     }
 
     ApplyStiffnessMatrix(in, scratch);
-    double factor = time_step_ * time_step_;
+    double factor = dt * dt;
     for (std::size_t idx = 0; idx < count; ++idx) {
         out[idx] -= scratch[idx] * factor;
         out[idx] = ClampAxis(out[idx], free_dof[idx]);
@@ -343,7 +351,7 @@ double Cloth3D::DotProduct(const std::vector<Vec3>& a, const std::vector<Vec3>& 
     return result;
 }
 
-bool Cloth3D::ConjugateGradient(std::vector<Vec3>& x, const std::vector<Vec3>& b) const {
+bool Cloth3D::ConjugateGradient(std::vector<Vec3>& x, const std::vector<Vec3>& b, double dt) const {
     const std::size_t count = b.size();
     if (count == 0) {
         return true;
@@ -354,7 +362,7 @@ bool Cloth3D::ConjugateGradient(std::vector<Vec3>& x, const std::vector<Vec3>& b
     std::vector<Vec3> Ap(count, Vec3(0.0, 0.0, 0.0));
     std::vector<Vec3> scratch(count, Vec3(0.0, 0.0, 0.0));
 
-    ApplyImplicitMatrix(x, Ap, scratch);
+    ApplyImplicitMatrix(x, Ap, scratch, dt);
     for (std::size_t idx = 0; idx < count; ++idx) {
         r[idx] = b[idx] - Ap[idx];
     }
@@ -370,7 +378,7 @@ bool Cloth3D::ConjugateGradient(std::vector<Vec3>& x, const std::vector<Vec3>& b
 
     int max_iterations = std::max<int>(static_cast<int>(count), 50);
     for (int iteration = 0; iteration < max_iterations; ++iteration) {
-        ApplyImplicitMatrix(p, Ap, scratch);
+        ApplyImplicitMatrix(p, Ap, scratch, dt);
         double denom = DotProduct(p, Ap);
         if (std::abs(denom) < 1e-12) {
             return false;
