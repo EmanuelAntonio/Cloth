@@ -33,21 +33,44 @@ mantido e agora também há uma porta completa em C++ utilizando FreeGLUT e Open
    ```
 
 ## Como compilar e executar (C++)
+Você pode compilar manualmente ou utilizar o `make` fornecido no repositório.
+
+### Linux/macOS
 1. Instale os pacotes de desenvolvimento do OpenGL/FreeGLUT e o suporte a OpenMP do seu compilador. Em distribuições Debian/Ubuntu
    isso pode ser feito com:
    ```bash
    sudo apt-get install build-essential freeglut3-dev
    ```
-2. Compile todos os arquivos C++ habilitando OpenMP (ajuste o comando conforme o seu sistema):
+2. Compile utilizando o `make` padrão (ou o comando `g++` manual abaixo):
    ```bash
+   make
+   # ou
    g++ -std=c++17 -O2 -fopenmp cpp/*.cpp -lGL -lGLU -lglut -o cloth_sim
    ```
 3. Execute o binário resultante:
    ```bash
    ./cloth_sim --scenario sphere --workers 4
    ```
-   Os mesmos parâmetros da versão Python estão disponíveis (`--size`, `--subdivisions`, `--max-stretch`, `--self-collision-distance`,
-   `--workers`, etc.).
+
+### Windows (MinGW)
+1. Utilize um ambiente MinGW-w64 ou MSYS2 com suporte a OpenMP (`-fopenmp`).
+2. As bibliotecas pré-compiladas do FreeGLUT e do OpenGL já estão em `cpp/lib`. Para incluir os cabeçalhos correspondentes, adicione-os
+   em `cpp/include` (caso ainda não exista, crie a pasta e copie os headers do FreeGLUT).
+3. Compile com o `make` do MinGW, ativando a configuração para Windows:
+   ```bash
+   mingw32-make PLATFORM=windows
+   # ou
+   make PLATFORM=windows
+   ```
+   O alvo gerado será `cloth_sim.exe` e será linkado automaticamente contra os arquivos de `cpp/lib` (`freeglut`, `opengl32`, `glu32`,
+   `winmm` e `gdi32`).
+4. Execute o binário normalmente:
+   ```bash
+   cloth_sim.exe --scenario sphere --workers 4
+   ```
+
+Os mesmos parâmetros da versão Python estão disponíveis (`--size`, `--subdivisions`, `--max-stretch`, `--self-collision-distance`,
+`--workers`, etc.).
 
 ## Como enviar as alterações para o GitHub
 1. Garanta que suas alterações estejam salvas e verifique o estado do repositório:
