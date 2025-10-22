@@ -9,6 +9,19 @@ from mesh3d import Mesh3D
 
 
 @dataclass
+class SphereCollider:
+    center: np.ndarray
+    radius: float
+
+    def __post_init__(self) -> None:
+        self.center = np.asarray(self.center, dtype=np.float64)
+        if self.center.shape != (3,):
+            raise ValueError("center must be a 3D vector")
+        if self.radius <= 0:
+            raise ValueError("radius must be positive")
+
+
+@dataclass
 class Cloth3D:
     mesh: Mesh3D
     spring_k: float
@@ -17,6 +30,7 @@ class Cloth3D:
     damping: float = 0.02
     gravity: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, -9.81]))
     max_stretch_ratio: float | None = None
+    colliders: list[SphereCollider] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.spring_k <= 0:
@@ -62,6 +76,7 @@ class Cloth3D:
         positions[:] += self.velocities * self.time_step
 
         self._enforce_max_stretch()
+        self._resolve_collisions()
 
         # Apply constraints
         for idx in range(self.mesh.n_vertices):
@@ -120,3 +135,42 @@ class Cloth3D:
                 self.velocities[i, mask_i] = 0.0
             if np.any(mask_j):
                 self.velocities[j, mask_j] = 0.0
+
+    def _resolve_collisions(self) -> None:
+        """Resolve collisions against registered colliders."""
+
+        if not self.colliders:
+            return
+
+        positions = self.mesh.positions
+
+        for collider in self.colliders:
+            center = collider.center
+            radius = collider.radius
+            for idx in range(self.mesh.n_vertices):
+                free_mask = self.mesh.free_dof[idx]
+                if not np.any(free_mask):
+                    continue
+
+                offset = positions[idx] - center
+                distance = np.linalg.norm(offset)
+                if distance >= radius:
+                    continue
+
+                if distance < 1e-8:
+                    normal = np.array([0.0, 0.0, 1.0])
+                else:
+                    normal = offset / distance
+
+                target_position = center + normal * radius
+                correction = target_position - positions[idx]
+                correction = np.where(free_mask, correction, 0.0)
+
+                if not np.any(np.abs(correction) > 1e-12):
+                    continue
+
+                positions[idx] += correction
+
+                normal_velocity = np.dot(self.velocities[idx], normal)
+                if normal_velocity < 0.0:
+                    self.velocities[idx] -= normal_velocity * normal

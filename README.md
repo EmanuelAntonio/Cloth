@@ -17,6 +17,15 @@ Este repositório contém um protótipo de simulação de tecido 3D baseado em u
    Use as opções `--size`, `--subdivisions`, `--spring`, `--timestep` e `--max-stretch` para ajustar a malha e a simulação.
    O parâmetro `--max-stretch` limita o alongamento máximo das molas em relação ao comprimento de repouso (por exemplo, `--max-stretch 1.5`).
 
+   O argumento `--scenario` permite alternar entre os cenários disponíveis:
+   - `cloth` (padrão): tecido preso nos quatro cantos, suspenso no ar.
+   - `sphere`: tecido completamente solto que cai sobre uma esfera sólida imóvel.
+
+   No cenário da esfera também é possível ajustar o raio e a posição inicial do tecido:
+   ```bash
+   python -m src.main --scenario sphere --sphere-radius 0.75 --drop-height 1.0
+   ```
+
 ## Como enviar as alterações para o GitHub
 1. Garanta que suas alterações estejam salvas e verifique o estado do repositório:
    ```bash

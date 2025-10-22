@@ -37,6 +37,7 @@ from OpenGL.GL import (
     GL_SMOOTH,
     GL_SPECULAR,
     GL_TRIANGLES,
+    GL_TRIANGLE_STRIP,
 )
 from OpenGL.GLU import gluLookAt, gluPerspective
 from OpenGL.GLUT import (
@@ -61,7 +62,7 @@ from OpenGL.GLUT import (
     glutWMCloseFunc,
 )
 
-from cloth3d import Cloth3D
+from cloth3d import Cloth3D, SphereCollider
 from mesh3d import Mesh3D
 
 
@@ -114,6 +115,7 @@ class Draw3D:
         glutReshapeFunc(self.reshape)
         glutMouseFunc(self.mouse_button)
         glutMotionFunc(self.mouse_motion)
+        glutWMCloseFunc(lambda: sys.exit(0))
 
         glutMainLoop()
 
@@ -204,6 +206,25 @@ class Draw3D:
             up[0], up[1], up[2],
         )
 
+        self._draw_colliders()
+        self._draw_cloth_surface()
+
+        glutSwapBuffers()
+
+    def _draw_colliders(self) -> None:
+        if not self.cloth.colliders:
+            return
+
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, (0.2, 0.2, 0.2, 1.0))
+        glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, (0.5, 0.5, 0.5, 1.0))
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, (0.3, 0.3, 0.3, 1.0))
+        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 8.0)
+
+        for collider in self.cloth.colliders:
+            if isinstance(collider, SphereCollider):
+                self._draw_sphere(collider.center, collider.radius)
+
+    def _draw_cloth_surface(self) -> None:
         glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, (0.1, 0.3, 0.05, 1.0))
         glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, (0.4, 0.9, 0.1, 1.0))
         glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, (0.7, 1.0, 0.6, 1.0))
@@ -217,4 +238,30 @@ class Draw3D:
                 glVertex3f(*self.mesh.positions[vertex_index])
         glEnd()
 
-        glutSwapBuffers()
+    def _draw_sphere(self, center: np.ndarray, radius: float, slices: int = 36, stacks: int = 18) -> None:
+        for stack in range(stacks):
+            v0 = stack / stacks
+            v1 = (stack + 1) / stacks
+            lat0 = math.pi * (v0 - 0.5)
+            lat1 = math.pi * (v1 - 0.5)
+
+            sin_lat0 = math.sin(lat0)
+            cos_lat0 = math.cos(lat0)
+            sin_lat1 = math.sin(lat1)
+            cos_lat1 = math.cos(lat1)
+
+            glBegin(GL_TRIANGLE_STRIP)
+            for slice_idx in range(slices + 1):
+                u = slice_idx / slices
+                lon = 2.0 * math.pi * u
+                sin_lon = math.sin(lon)
+                cos_lon = math.cos(lon)
+
+                normal0 = np.array([cos_lon * cos_lat0, sin_lon * cos_lat0, sin_lat0], dtype=np.float64)
+                normal1 = np.array([cos_lon * cos_lat1, sin_lon * cos_lat1, sin_lat1], dtype=np.float64)
+
+                glNormal3fv(normal1)
+                glVertex3f(*(center + radius * normal1))
+                glNormal3fv(normal0)
+                glVertex3f(*(center + radius * normal0))
+            glEnd()
