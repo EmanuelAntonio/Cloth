@@ -115,6 +115,7 @@ class Draw3D:
         glutReshapeFunc(self.reshape)
         glutMouseFunc(self.mouse_button)
         glutMotionFunc(self.mouse_motion)
+        glutWMCloseFunc(self._on_close)
 
         glutMainLoop()
 
@@ -227,7 +228,7 @@ class Draw3D:
 
         for collider in self.cloth.colliders:
             if isinstance(collider, SphereCollider):
-                self._draw_sphere(collider.center, collider.radius*0.95)
+                self._draw_sphere(collider.center, collider.radius)
 
     def _draw_cloth_surface(self) -> None:
         glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, (0.1, 0.3, 0.05, 1.0))
