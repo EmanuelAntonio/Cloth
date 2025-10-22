@@ -18,6 +18,7 @@ Este repositório contém um protótipo de simulação de tecido 3D baseado em u
    O parâmetro `--max-stretch` limita o alongamento máximo das molas em relação ao comprimento de repouso (por exemplo, `--max-stretch 1.5`).
    Já `--max-stretch-relaxation` controla o quanto da correção é aplicada por passo (valores menores deixam o tecido mais flexível).
    Os parâmetros `--self-collision-distance` e `--self-collision-iterations` ativam e configuram o sistema de auto colisão, garantindo que o tecido não atravesse a si mesmo.
+   Para aproveitar múltiplos núcleos, utilize `--workers` para paralelizar o cálculo das forças de mola (por exemplo, `--workers 4`).
 
    O argumento `--scenario` permite alternar entre os cenários disponíveis:
    - `cloth` (padrão): tecido preso nos quatro cantos, suspenso no ar.

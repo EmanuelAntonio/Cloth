@@ -68,6 +68,12 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Number of relaxation passes used to separate colliding vertices",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of worker threads for spring force evaluation (>=1)",
+    )
     return parser.parse_args()
 
 
@@ -98,6 +104,7 @@ def main() -> None:
         colliders=colliders,
         self_collision_distance=args.self_collision_distance,
         self_collision_iterations=args.self_collision_iterations,
+        worker_count=args.workers,
     )
     viewer = Draw3D(mesh=mesh, cloth=cloth)
     viewer.run()

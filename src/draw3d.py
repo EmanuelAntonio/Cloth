@@ -210,6 +210,12 @@ class Draw3D:
 
         glutSwapBuffers()
 
+    def _on_close(self) -> None:
+        try:
+            self.cloth.close()
+        finally:
+            sys.exit(0)
+
     def _draw_colliders(self) -> None:
         if not self.cloth.colliders:
             return

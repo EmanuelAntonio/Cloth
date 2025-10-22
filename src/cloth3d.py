@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from typing import Optional
 
 import numpy as np
 
@@ -35,6 +37,11 @@ class Cloth3D:
     colliders: list[SphereCollider] = field(default_factory=list)
     self_collision_distance: float = 0.05
     self_collision_iterations: int = 1
+    worker_count: int = 1
+    _executor: Optional[ThreadPoolExecutor] = field(init=False, default=None, repr=False)
+    _edge_i: np.ndarray = field(init=False, repr=False)
+    _edge_j: np.ndarray = field(init=False, repr=False)
+    _n_edges: int = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.spring_k <= 0:
@@ -49,6 +56,10 @@ class Cloth3D:
             raise ValueError("self_collision_distance must be >= 0")
         if self.self_collision_iterations < 0:
             raise ValueError("self_collision_iterations must be >= 0")
+        if self.worker_count < 1:
+            raise ValueError("worker_count must be >= 1")
+
+        self.worker_count = int(self.worker_count)
 
         self.velocities = np.zeros_like(self.mesh.positions)
         self.rest_lengths = np.array([
@@ -61,6 +72,18 @@ class Cloth3D:
             for i, j in self.mesh.edges
         }
 
+        edge_array = np.asarray(self.mesh.edges, dtype=np.int32)
+        if edge_array.ndim != 2 or edge_array.shape[1] != 2:
+            raise ValueError("edges must be convertible to an (M, 2) integer array")
+        self._edge_i = edge_array[:, 0]
+        self._edge_j = edge_array[:, 1]
+        self._n_edges = int(edge_array.shape[0])
+
+        if self.worker_count > 1:
+            self._executor = ThreadPoolExecutor(max_workers=self.worker_count)
+        else:
+            self._executor = None
+
         self._self_collision_distance = float(self.self_collision_distance)
         self._self_collision_distance_sq = self._self_collision_distance ** 2
 
@@ -72,17 +95,7 @@ class Cloth3D:
         forces = np.zeros_like(positions)
 
         # Spring forces
-        for edge_index, (i, j) in enumerate(self.mesh.edges):
-            delta = positions[j] - positions[i]
-            length = np.linalg.norm(delta)
-            if length == 0:
-                continue
-            direction = delta / length
-            rest = self.rest_lengths[edge_index]
-            force_magnitude = self.spring_k * (length - rest)
-            force = force_magnitude * direction
-            forces[i] += force
-            forces[j] -= force
+        self._accumulate_spring_forces(forces)
 
         # Gravity
         for idx in range(self.mesh.n_vertices):
@@ -157,6 +170,45 @@ class Cloth3D:
                 self.velocities[i, mask_i] = 0.0
             if np.any(mask_j):
                 self.velocities[j, mask_j] = 0.0
+
+    def _accumulate_spring_forces(self, out_forces: np.ndarray) -> None:
+        if self._executor is None:
+            self._spring_force_chunk(0, self._n_edges, out_forces)
+            return
+
+        chunk_size = max(1, math.ceil(self._n_edges / self.worker_count))
+        futures = []
+        for start in range(0, self._n_edges, chunk_size):
+            end = min(self._n_edges, start + chunk_size)
+            futures.append(self._executor.submit(self._spring_force_chunk_array, start, end))
+
+        for future in futures:
+            out_forces += future.result()
+
+    def _spring_force_chunk(self, start: int, end: int, out_forces: np.ndarray) -> None:
+        positions = self.mesh.positions
+        rest_lengths = self.rest_lengths
+        edge_i = self._edge_i
+        edge_j = self._edge_j
+
+        for edge_index in range(start, end):
+            i = int(edge_i[edge_index])
+            j = int(edge_j[edge_index])
+            delta = positions[j] - positions[i]
+            length = float(np.linalg.norm(delta))
+            if length == 0.0:
+                continue
+            direction = delta / length
+            rest = rest_lengths[edge_index]
+            force_magnitude = self.spring_k * (length - rest)
+            force = force_magnitude * direction
+            out_forces[i] += force
+            out_forces[j] -= force
+
+    def _spring_force_chunk_array(self, start: int, end: int) -> np.ndarray:
+        local = np.zeros_like(self.mesh.positions)
+        self._spring_force_chunk(start, end, local)
+        return local
 
     def _resolve_collisions(self) -> None:
         """Resolve collisions against registered colliders."""
@@ -290,3 +342,12 @@ class Cloth3D:
                                     self.velocities[other] = np.where(
                                         free_j, vel_j, self.velocities[other]
                                     )
+
+    def close(self) -> None:
+        executor = self._executor
+        if executor is not None:
+            executor.shutdown(wait=True)
+            self._executor = None
+
+    def __del__(self) -> None:  # pragma: no cover - best-effort cleanup
+        self.close()
