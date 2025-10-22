@@ -110,6 +110,7 @@ void Cloth3D::ComputeStepImplicit() {
 
     double dt = time_step_;
     double cfl = ComputeCFLTimeStep();
+    std::cout << "CFL: " << cfl << std::endl;
     if (std::isfinite(cfl)) {
         dt = std::min(dt, cfl);
     }
@@ -175,6 +176,7 @@ void Cloth3D::ComputeStepExplicit() {
     auto& positions = mesh_->positions;
     double dt = time_step_;
     double cfl = ComputeCFLTimeStep();
+    std::cout << "CFL: " << cfl << std::endl;
     if (std::isfinite(cfl)) {
         dt = std::min(dt, cfl);
     }
@@ -612,9 +614,10 @@ void Cloth3D::ResolveSelfCollisions() {
                 }
             }
         }
+    }
 }
 
-double Cloth3D::ComputeCFLTimeStep() const {
+double Cloth3D::ComputeCFLTimeStep(){
     if (spring_k_ <= 0.0) {
         return std::numeric_limits<double>::infinity();
     }

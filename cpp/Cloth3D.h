@@ -3,6 +3,7 @@
 #include "Mesh3D.h"
 #include "Vec3.h"
 
+#include <iostream>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -34,7 +35,7 @@ public:
     void ComputeStepImplicit();
     void ComputeStepExplicit();
 
-    double ComputeCFLTimeStep() const;
+    double ComputeCFLTimeStep();
 
     Mesh3D& Mesh() { return *mesh_; }
     const Mesh3D& Mesh() const { return *mesh_; }

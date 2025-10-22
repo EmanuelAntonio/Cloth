@@ -154,7 +154,8 @@ void Draw3D::Display() {
 
 void Draw3D::Idle() {
     if (cloth_) {
-        cloth_->ComputeStepImplicit();
+        // cloth_->ComputeStepImplicit();
+        cloth_->ComputeStepExplicit();
     }
     glutPostRedisplay();
 }
